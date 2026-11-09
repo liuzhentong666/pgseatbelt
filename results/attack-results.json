@@ -1,0 +1,1654 @@
+{
+  "database": "agentdb_test_guardsuite_9f23a8d9",
+  "server": "PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+  "guard_roles_existed_before": null,
+  "problems_before_allowing_restock": [
+    "guard_broker may execute shop.restock(bigint,integer), which runs as its owner",
+    "guard_keeper may execute shop.restock(bigint,integer), which runs as its owner",
+    "guard_worker may execute shop.restock(bigint,integer), which runs as its owner"
+  ],
+  "left_behind": "0 databases, 0 guard roles",
+  "holds": 258,
+  "notes": 15,
+  "gaps": [],
+  "results": [
+    {
+      "group": "normal",
+      "name": "self_check_is_clean_after_install",
+      "status": "HOLDS",
+      "detail": "[]"
+    },
+    {
+      "group": "normal",
+      "name": "a_write_lands_on_the_live_table_at_once",
+      "status": "HOLDS",
+      "detail": "10.0 -> 11.0"
+    },
+    {
+      "group": "normal",
+      "name": "the_audit_names_the_real_login",
+      "status": "HOLDS",
+      "detail": "guard_atk_03c461c40506"
+    },
+    {
+      "group": "normal",
+      "name": "budget_charged_for_the_row",
+      "status": "HOLDS",
+      "detail": "rows_left=49, bytes_left=4999631"
+    },
+    {
+      "group": "normal",
+      "name": "the_applications_own_writes_pass_untouched",
+      "status": "HOLDS",
+      "detail": "rc=0; audit rows stay 1"
+    },
+    {
+      "group": "escalate",
+      "name": "reset_role_leaves_nothing",
+      "status": "HOLDS",
+      "detail": "guard_atk_03c461c40506/guard_atk_03c461c40506/off"
+    },
+    {
+      "group": "escalate",
+      "name": "set_role_postgres",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "set_role_old_client",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "set_role_worker",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "set_role_keeper",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "set_role_broker",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "set_session_authorization",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "create_role",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "create_database",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "create_schema",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "create_temp_table",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "create_table_in_public",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "create_function_in_public",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "alter_self_superuser",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "alter_self_createrole",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "alter_self_bypassrls",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "extend_own_expiry",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "raise_own_connection_limit",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "grant_self_the_keeper_role",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "grant_self_set_on_worker",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "session_replication_role",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "own_temp_file_limit",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "own_temp_file_limit_default",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "alter_database",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "alter_system",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "reload_config",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "read_server_file",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "list_server_directory",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "copy_to_program",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "copy_to_server_file",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "copy_from_server_file",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "read_password_hashes",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "change_the_role_catalog",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "create_extension",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "escalate",
+      "name": "reset_all_keeps_its_temp_file_limit",
+      "status": "HOLDS",
+      "detail": "100MB"
+    },
+    {
+      "group": "guard",
+      "name": "drop_a_protected_table",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "alter_a_protected_table",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "truncate_a_protected_table",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "disable_the_guard_trigger",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "drop_the_guard_trigger",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "disable_the_commit_check",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "write_an_unprotected_table",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "create_an_index",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "reindex",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "cluster",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "comment_on_a_table",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "read_the_audit",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "rewrite_the_audit",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "delete_the_audit",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "insert_into_the_audit",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "raise_own_budget",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "read_the_budgets",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "issue_own_budget",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "reset_own_spend",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "forge_an_intent",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "clear_the_commit_check",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "mark_own_changes_undone",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "open_the_gate",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "change_the_fingerprint",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "allow_a_function",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "allow_a_function_the_owners_way",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "unprotect_a_table",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "protect",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "freeze",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "unfreeze",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "stop_another_agent",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "undo",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "report",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "run_the_self_check",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "read_the_self_check",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "read_the_status",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "end_sessions",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "list_the_agents",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "inner_refuse",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "inner_gate",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "inner_is_agent",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "inner_fingerprint",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "guard",
+      "name": "snapshot_isolation_is_refused",
+      "status": "HOLDS",
+      "detail": "refused AB006"
+    },
+    {
+      "group": "guard",
+      "name": "serializable_is_refused",
+      "status": "HOLDS",
+      "detail": "refused AB006"
+    },
+    {
+      "group": "guard",
+      "name": "an_agent_may_lock_a_protected_table",
+      "status": "NOTE",
+      "detail": "accepted (UPDATE allows it); the keeper ends it, see the hold group"
+    },
+    {
+      "group": "guard",
+      "name": "select_for_update_is_allowed",
+      "status": "NOTE",
+      "detail": "accepted: agents need it to read what they will write"
+    },
+    {
+      "group": "guard",
+      "name": "vacuum_full_by_an_agent",
+      "status": "NOTE",
+      "detail": "exit 0; 'WARNING:  01000: permission denied to vacuum \"products\", skipping it\\nLOCATION:  vacuum_is_relation_owner, vacuum.c:743'"
+    },
+    {
+      "group": "guard",
+      "name": "protected_tables_unchanged_after_all_of_this",
+      "status": "HOLDS",
+      "detail": "all four tables identical"
+    },
+    {
+      "group": "agents",
+      "name": "overwriting_another_agents_row_is_recorded_as_the_overwriter",
+      "status": "NOTE",
+      "detail": "accepted, recorded as the overwriter; undo of the first then stops at this row"
+    },
+    {
+      "group": "agents",
+      "name": "become_another_agent",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "agents",
+      "name": "share_its_own_login_with_another",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "agents",
+      "name": "end_another_agents_session",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "agents",
+      "name": "cannot_read_another_agents_statements",
+      "status": "HOLDS",
+      "detail": "'<insufficient privilege>'"
+    },
+    {
+      "group": "agents",
+      "name": "status_shows_only_itself",
+      "status": "HOLDS",
+      "detail": "{\"login\": \"guard_atk_03c461c40506\", \"frozen\": null, \"changed\": {\"shop.products\": 2}, \"rows_left\": 48, \"bytes_left\": 4999255, \"valid_until\": \"2026-11-09T23:05:07.425961+08:00\", \"max_table_share\": 0.1}"
+    },
+    {
+      "group": "budget",
+      "name": "statement_over_budget",
+      "status": "HOLDS",
+      "detail": "refused AB002"
+    },
+    {
+      "group": "budget",
+      "name": "over_budget_statement_left_the_tables_alone",
+      "status": "HOLDS",
+      "detail": "tables the same"
+    },
+    {
+      "group": "budget",
+      "name": "catching_the_refusal_keeps_nothing",
+      "status": "HOLDS",
+      "detail": "the DO block committed, tables the same"
+    },
+    {
+      "group": "budget",
+      "name": "failed_statements_cost_nothing",
+      "status": "HOLDS",
+      "detail": "rows_left=10"
+    },
+    {
+      "group": "budget",
+      "name": "many_small_statements_stop_at_the_budget",
+      "status": "HOLDS",
+      "detail": "2 of 4 statements of 4 rows; 2 left"
+    },
+    {
+      "group": "budget",
+      "name": "two_sessions_cannot_spend_the_budget_twice",
+      "status": "HOLDS",
+      "detail": "['AB002', 'landed']; 8 left"
+    },
+    {
+      "group": "budget",
+      "name": "a_huge_row_over_the_storage_budget",
+      "status": "HOLDS",
+      "detail": "refused AB003"
+    },
+    {
+      "group": "budget",
+      "name": "a_row_that_compresses_well_pays_full_size",
+      "status": "HOLDS",
+      "detail": "refused AB003"
+    },
+    {
+      "group": "budget",
+      "name": "no_budget_row_means_no_writes",
+      "status": "HOLDS",
+      "detail": "refused AB002"
+    },
+    {
+      "group": "budget",
+      "name": "broker_cannot_top_up_a_budget",
+      "status": "HOLDS",
+      "detail": "refused 23505"
+    },
+    {
+      "group": "incident",
+      "name": "drop_the_database",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "incident",
+      "name": "drop_the_app_schema",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "incident",
+      "name": "drop_the_guard_schema",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "incident",
+      "name": "drop_the_audit_table",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "incident",
+      "name": "drop_a_constraint",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "incident",
+      "name": "take_over_ownership",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "incident",
+      "name": "create_a_shadow_database",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "incident",
+      "name": "create_a_table_beside_the_data",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "incident",
+      "name": "deleting_the_whole_table_is_refused",
+      "status": "HOLDS",
+      "detail": "refused AB007"
+    },
+    {
+      "group": "incident",
+      "name": "an_update_with_no_where_is_refused",
+      "status": "HOLDS",
+      "detail": "refused AB007"
+    },
+    {
+      "group": "incident",
+      "name": "the_refusal_says_how_the_change_can_land",
+      "status": "HOLDS",
+      "detail": "ERROR:  AB007: Too large a share of shop.products\nDETAIL:  {\"rule\": \"beyond 20 rows, at most max_table_share of the table\", \"login\": \"guard_atk_f10bf5e50453\", \"size_before\": 4000, \"max_table_share\": 0.1, \"changed_by_this_login\": 401, \"existing_changed_by_this_login\": 401}\nHINT:  Nothing in this stat"
+    },
+    {
+      "group": "incident",
+      "name": "hundreds_of_fabricated_rows_are_refused",
+      "status": "HOLDS",
+      "detail": "refused AB007"
+    },
+    {
+      "group": "incident",
+      "name": "a_cascade_from_a_small_delete_is_counted",
+      "status": "HOLDS",
+      "detail": "refused AB007"
+    },
+    {
+      "group": "incident",
+      "name": "none_of_that_reached_the_tables",
+      "status": "HOLDS",
+      "detail": "tables the same"
+    },
+    {
+      "group": "incident",
+      "name": "small_statements_cannot_add_up_past_the_share",
+      "status": "HOLDS",
+      "detail": "['landed', 'landed', 'AB007']"
+    },
+    {
+      "group": "incident",
+      "name": "a_read_only_login_can_read",
+      "status": "HOLDS",
+      "detail": "4000"
+    },
+    {
+      "group": "incident",
+      "name": "a_read_only_login_cannot_write",
+      "status": "HOLDS",
+      "detail": "refused AB002"
+    },
+    {
+      "group": "incident",
+      "name": "the_report_says_what_really_happened",
+      "status": "HOLDS",
+      "detail": "{\"shop.orders\": {\"deleted\": 20001, \"updated\": 0, \"inserted\": 0}}"
+    },
+    {
+      "group": "incident",
+      "name": "a_wiped_table_comes_back_identical",
+      "status": "HOLDS",
+      "detail": "0 rows after the wipe; identical after undo: True; undo took 5.9 s"
+    },
+    {
+      "group": "incident",
+      "name": "the_report_says_it_was_undone",
+      "status": "HOLDS",
+      "detail": "20001 of 20001 changes undone"
+    },
+    {
+      "group": "incident",
+      "name": "an_agent_cannot_read_the_reports",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "incident",
+      "name": "turn_off_its_statement_log",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "incident",
+      "name": "reset_its_statement_log",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "incident",
+      "name": "a_refused_attempt_leaves_a_trace",
+      "status": "HOLDS",
+      "detail": "refused AB007; log: 2026-11-09 22:06:59.403 CST [1408089] guard_atk_03c461c40506@agentdb_test_guardsuite_9f23a8d9 LOG:  statement: UPDATE shop.settings SET value='x_marker_14d233535918';"
+    },
+    {
+      "group": "stop",
+      "name": "stopped_login_cannot_write",
+      "status": "HOLDS",
+      "detail": "refused AB002"
+    },
+    {
+      "group": "stop",
+      "name": "stopped_login_cannot_write_a_held_row",
+      "status": "HOLDS",
+      "detail": "refused AB002"
+    },
+    {
+      "group": "stop",
+      "name": "stopped_login_never_queues_for_a_row_lock",
+      "status": "HOLDS",
+      "detail": "answered in 0.5 s while the row was held"
+    },
+    {
+      "group": "hold",
+      "name": "turning_off_timeouts_can_block_a_row",
+      "status": "NOTE",
+      "detail": "accepted; the application's write to that row got 55P03"
+    },
+    {
+      "group": "hold",
+      "name": "keeper_ends_an_idle_holder_and_writes_resume",
+      "status": "HOLDS",
+      "detail": "ended {'guard_atk_03c461c40506': 'idle in transaction'}; next write rc=0"
+    },
+    {
+      "group": "hold",
+      "name": "keeper_ends_a_holder_that_looks_busy",
+      "status": "HOLDS",
+      "detail": "ended {'guard_atk_03c461c40506': 'transaction too long'}; next write rc=0"
+    },
+    {
+      "group": "hold",
+      "name": "keeper_ends_an_idle_session_holding_an_advisory_lock",
+      "status": "HOLDS",
+      "detail": "{'guard_atk_03c461c40506': 'idle holding an advisory lock'}"
+    },
+    {
+      "group": "hold",
+      "name": "a_plainly_idle_session_is_left_alone",
+      "status": "HOLDS",
+      "detail": "'still here'; ended {}"
+    },
+    {
+      "group": "hold",
+      "name": "an_agent_can_lock_a_whole_table",
+      "status": "NOTE",
+      "detail": "accepted; the application's read got 55P03"
+    },
+    {
+      "group": "hold",
+      "name": "keeper_ends_a_table_lock_at_its_next_round",
+      "status": "HOLDS",
+      "detail": "ended {'guard_atk_03c461c40506': 'holding or waiting for a table lock'}; next read rc=0"
+    },
+    {
+      "group": "hold",
+      "name": "a_waiting_table_lock_queues_the_applications_reads",
+      "status": "NOTE",
+      "detail": "a new read behind it got 55P03"
+    },
+    {
+      "group": "hold",
+      "name": "keeper_ends_a_session_waiting_for_a_table_lock",
+      "status": "HOLDS",
+      "detail": "ended {'guard_atk_03c461c40506': 'holding or waiting for a table lock'}; next read rc=0"
+    },
+    {
+      "group": "hold",
+      "name": "agent_cannot_end_the_keepers_session",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "hold",
+      "name": "keeper_cannot_end_a_superuser_session",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "hold",
+      "name": "prepared_transactions_cannot_outlive_a_session",
+      "status": "HOLDS",
+      "detail": "refused 55000; max_prepared_transactions=0, and the self-check reports any other value"
+    },
+    {
+      "group": "storage",
+      "name": "large_object_from_bytea",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "storage",
+      "name": "large_object_create",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "storage",
+      "name": "large_object_creat",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "storage",
+      "name": "temporary_table",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "storage",
+      "name": "own_role_settings_refuse_invented_names",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "storage",
+      "name": "own_role_settings_hold_some_data_outside_the_budget",
+      "status": "NOTE",
+      "detail": "accepted: 1000000 bytes of one letter, 11544 bytes compressed; one row per login, dropped with the login"
+    },
+    {
+      "group": "storage",
+      "name": "write_ahead_log_messages",
+      "status": "NOTE",
+      "detail": "accepted: not kept, recycled with the log"
+    },
+    {
+      "group": "undo",
+      "name": "bad_changes_landed",
+      "status": "HOLDS",
+      "detail": "rows changed"
+    },
+    {
+      "group": "undo",
+      "name": "undo_ends_the_logins_sessions",
+      "status": "HOLDS",
+      "detail": "''"
+    },
+    {
+      "group": "undo",
+      "name": "undoes_every_change_by_the_login",
+      "status": "HOLDS",
+      "detail": "4 undone, 0 left, refused None"
+    },
+    {
+      "group": "undo",
+      "name": "undo_returns_the_tables_to_the_same_rows",
+      "status": "HOLDS",
+      "detail": "all four tables identical"
+    },
+    {
+      "group": "undo",
+      "name": "nothing_was_rewritten",
+      "status": "HOLDS",
+      "detail": "4 of 4 audit rows still there"
+    },
+    {
+      "group": "undo",
+      "name": "rerunning_undo_changes_nothing",
+      "status": "HOLDS",
+      "detail": "{'login': 'guard_atk_57ecc29012f0', 'undone': 0, 'refused': None, 'remaining': 0}"
+    },
+    {
+      "group": "undo",
+      "name": "an_undone_login_stays_stopped",
+      "status": "HOLDS",
+      "detail": "refused AB002"
+    },
+    {
+      "group": "undo",
+      "name": "an_open_transaction_cannot_hold_up_undo",
+      "status": "HOLDS",
+      "detail": "finished in 1.8 s"
+    },
+    {
+      "group": "undo",
+      "name": "undo_stops_at_newer_work_and_says_why",
+      "status": "HOLDS",
+      "detail": "remaining 1; price 3.0"
+    },
+    {
+      "group": "undo",
+      "name": "undo_finishes_once_the_newer_work_is_undone",
+      "status": "HOLDS",
+      "detail": "1 undone; price 10.0"
+    },
+    {
+      "group": "incident",
+      "name": "wiping_a_table_smaller_than_the_free_rows_is_refused",
+      "status": "HOLDS",
+      "detail": "refused AB007"
+    },
+    {
+      "group": "incident",
+      "name": "a_small_table_cannot_be_rewritten_a_little_at_a_time",
+      "status": "HOLDS",
+      "detail": "['landed', 'AB007']"
+    },
+    {
+      "group": "incident",
+      "name": "a_one_row_table_and_an_empty_table_still_take_ordinary_changes",
+      "status": "HOLDS",
+      "detail": "['landed', 'landed']"
+    },
+    {
+      "group": "undo",
+      "name": "undo_puts_back_rows_linked_by_ordinary_foreign_keys",
+      "status": "HOLDS",
+      "detail": "refused None; rows left: 0"
+    },
+    {
+      "group": "drift",
+      "name": "a_trigger_function_beside_the_tables_is_no_problem",
+      "status": "HOLDS",
+      "detail": "guard_broker may execute shop.atk_definer(), which runs as its owner; guard_keeper may execute shop.atk_definer(), which runs as its owner; guard_worker may execute shop.atk_definer(), which runs as its owner"
+    },
+    {
+      "group": "drift",
+      "name": "a_definer_function_agents_can_call_is_found",
+      "status": "HOLDS",
+      "detail": "guard_broker may execute shop.atk_definer(), which runs as its owner; guard_keeper may execute shop.atk_definer(), which runs as its owner; guard_worker may execute shop.atk_definer(), which runs as its owner"
+    },
+    {
+      "group": "drift",
+      "name": "an_allowed_definer_function_is_no_problem",
+      "status": "HOLDS",
+      "detail": "guard_broker may execute shop.atk_definer(), which runs as its owner; guard_keeper may execute shop.atk_definer(), which runs as its owner; guard_worker may execute shop.atk_definer(), which runs as its owner"
+    },
+    {
+      "group": "drift",
+      "name": "guard_trigger_disabled_is_found",
+      "status": "HOLDS",
+      "detail": "disabled trigger shop.products.guard_row"
+    },
+    {
+      "group": "drift",
+      "name": "guard_trigger_dropped_is_found",
+      "status": "HOLDS",
+      "detail": "guard functions or triggers changed; guarded table without trigger guard_row: shop.products"
+    },
+    {
+      "group": "drift",
+      "name": "intent_trigger_dropped_is_found",
+      "status": "HOLDS",
+      "detail": "guard functions or triggers changed; guarded table without trigger !guard_intent: shop.products"
+    },
+    {
+      "group": "drift",
+      "name": "audit_left_editable_is_found",
+      "status": "HOLDS",
+      "detail": "disabled trigger guard.audit.immutable"
+    },
+    {
+      "group": "drift",
+      "name": "commit_check_dropped_is_found",
+      "status": "HOLDS",
+      "detail": "guard functions or triggers changed; guard table without trigger guard.commit_check.at_commit"
+    },
+    {
+      "group": "drift",
+      "name": "write_grant_added_is_found",
+      "status": "HOLDS",
+      "detail": "guard_worker may change shop.app_log"
+    },
+    {
+      "group": "drift",
+      "name": "function_grant_added_is_found",
+      "status": "HOLDS",
+      "detail": "guard_worker may execute guard.undo(name)"
+    },
+    {
+      "group": "drift",
+      "name": "guard_read_grant_added_is_found",
+      "status": "HOLDS",
+      "detail": "guard_worker may read guard.budget"
+    },
+    {
+      "group": "drift",
+      "name": "schema_create_granted_is_found",
+      "status": "HOLDS",
+      "detail": "guard_worker may create in schema shop"
+    },
+    {
+      "group": "drift",
+      "name": "database_open_to_everyone_is_found",
+      "status": "HOLDS",
+      "detail": "any role may connect to this database"
+    },
+    {
+      "group": "drift",
+      "name": "temporary_tables_opened_is_found",
+      "status": "HOLDS",
+      "detail": "guard_worker may create schemas or temporary tables in this database"
+    },
+    {
+      "group": "drift",
+      "name": "large_objects_opened_is_found",
+      "status": "HOLDS",
+      "detail": "guard_worker may create large objects"
+    },
+    {
+      "group": "drift",
+      "name": "a_cascade_into_an_unprotected_table_is_found",
+      "status": "HOLDS",
+      "detail": "changing shop.products cascades into shop.atk_reviews, which is not guarded"
+    },
+    {
+      "group": "drift",
+      "name": "agent_login_made_superuser_is_found",
+      "status": "HOLDS",
+      "detail": "agent login too strong: guard_atk_03c461c40506; superuser logins changed"
+    },
+    {
+      "group": "drift",
+      "name": "agent_login_given_another_role_is_found",
+      "status": "HOLDS",
+      "detail": "agent login guard_atk_03c461c40506 holds pg_read_server_files"
+    },
+    {
+      "group": "drift",
+      "name": "worker_role_given_another_role_is_found",
+      "status": "HOLDS",
+      "detail": "guard_worker holds pg_read_server_files"
+    },
+    {
+      "group": "drift",
+      "name": "worker_role_can_log_in_is_found",
+      "status": "HOLDS",
+      "detail": "guard_worker has attributes it must not have"
+    },
+    {
+      "group": "drift",
+      "name": "keeper_given_unfreeze_is_found",
+      "status": "HOLDS",
+      "detail": "guard_keeper may execute guard.unfreeze()"
+    },
+    {
+      "group": "drift",
+      "name": "keeper_given_another_role_is_found",
+      "status": "HOLDS",
+      "detail": "guard_keeper holds pg_read_server_files"
+    },
+    {
+      "group": "drift",
+      "name": "broker_given_createdb_is_found",
+      "status": "HOLDS",
+      "detail": "guard_broker has attributes it must not have"
+    },
+    {
+      "group": "drift",
+      "name": "broker_given_another_role_to_hand_out_is_found",
+      "status": "HOLDS",
+      "detail": "guard_broker holds pg_read_server_files"
+    },
+    {
+      "group": "drift",
+      "name": "new_superuser_login_is_found",
+      "status": "HOLDS",
+      "detail": "superuser logins changed"
+    },
+    {
+      "group": "drift",
+      "name": "guard_function_rewritten_is_found",
+      "status": "HOLDS",
+      "detail": "guard functions or triggers changed"
+    },
+    {
+      "group": "drift",
+      "name": "an_allowed_definer_function_rewritten_is_found",
+      "status": "HOLDS",
+      "detail": "shop.restock(bigint,integer) was allowed, but has changed since"
+    },
+    {
+      "group": "drift",
+      "name": "a_role_holding_the_worker_role_through_another_is_found",
+      "status": "HOLDS",
+      "detail": "agent login guard_atk_03c461c40506 holds guard_atk_mid_25d781dd"
+    },
+    {
+      "group": "drift",
+      "name": "agent_login_with_no_expiry_is_found",
+      "status": "HOLDS",
+      "detail": "agent login not built by the broker: guard_atk_03c461c40506"
+    },
+    {
+      "group": "drift",
+      "name": "a_login_holding_the_worker_role_through_another_role_is_found",
+      "status": "HOLDS",
+      "detail": "agent login guard_atk_98c66373c28e holds guard_atk_nest_724ce8e7; agent login not built by the broker: guard_atk_98c66373c28e; guard_atk_98c66373c28e holds guard_worker through another role"
+    },
+    {
+      "group": "drift",
+      "name": "clean_again_after_every_repair",
+      "status": "HOLDS",
+      "detail": "[]"
+    },
+    {
+      "group": "freeze",
+      "name": "a_change_begun_before_the_freeze_cannot_commit",
+      "status": "HOLDS",
+      "detail": "refused AB000"
+    },
+    {
+      "group": "freeze",
+      "name": "keepers_round_freezes_on_a_problem",
+      "status": "HOLDS",
+      "detail": "guard_worker may execute guard.undo(name)"
+    },
+    {
+      "group": "freeze",
+      "name": "keepers_round_ends_transactions_already_past_the_gate",
+      "status": "HOLDS",
+      "detail": "[{'pid': 1409687, 'login': 'guard_atk_9321501f731a', 'reason': 'writing while frozen'}]"
+    },
+    {
+      "group": "freeze",
+      "name": "a_write_past_the_commit_check_cannot_commit_after_the_freeze",
+      "status": "HOLDS",
+      "detail": "tables the same"
+    },
+    {
+      "group": "freeze",
+      "name": "frozen_insert_is_refused",
+      "status": "HOLDS",
+      "detail": "refused AB000"
+    },
+    {
+      "group": "freeze",
+      "name": "frozen_update_is_refused",
+      "status": "HOLDS",
+      "detail": "refused AB000"
+    },
+    {
+      "group": "freeze",
+      "name": "frozen_delete_is_refused",
+      "status": "HOLDS",
+      "detail": "refused AB000"
+    },
+    {
+      "group": "freeze",
+      "name": "reads_and_the_reason_still_work",
+      "status": "HOLDS",
+      "detail": "guard_worker may execute guard.undo(name)"
+    },
+    {
+      "group": "freeze",
+      "name": "protected_tables_can_still_be_read",
+      "status": "HOLDS",
+      "detail": "4000"
+    },
+    {
+      "group": "freeze",
+      "name": "keeper_cannot_unfreeze",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "freeze",
+      "name": "broker_cannot_unfreeze",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "freeze",
+      "name": "agent_cannot_unfreeze",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "freeze",
+      "name": "tables_unchanged_while_frozen",
+      "status": "HOLDS",
+      "detail": "tables the same"
+    },
+    {
+      "group": "freeze",
+      "name": "fixing_the_cause_does_not_reopen_writes",
+      "status": "HOLDS",
+      "detail": "still frozen; self-check clean"
+    },
+    {
+      "group": "freeze",
+      "name": "undo_works_while_frozen",
+      "status": "HOLDS",
+      "detail": "1 undone"
+    },
+    {
+      "group": "freeze",
+      "name": "writes_work_again_after_unfreezing",
+      "status": "HOLDS",
+      "detail": "landed"
+    },
+    {
+      "group": "freeze",
+      "name": "rerunning_the_install_accepts_the_guard_but_opens_nothing",
+      "status": "HOLDS",
+      "detail": "problems []; still frozen: True"
+    },
+    {
+      "group": "broker",
+      "name": "create_superuser",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "broker",
+      "name": "create_replication",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "broker",
+      "name": "create_bypassrls",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "broker",
+      "name": "create_createdb",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "broker",
+      "name": "grant_the_keeper_role",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "broker",
+      "name": "grant_server_files_role",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "broker",
+      "name": "alter_postgres",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "broker",
+      "name": "read_protected_tables",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "broker",
+      "name": "read_budgets",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "broker",
+      "name": "raise_a_budget",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "broker",
+      "name": "undo",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "broker",
+      "name": "drop_a_role_it_did_not_make",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "broker",
+      "name": "use_the_worker_role",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "keeper",
+      "name": "write_protected_tables",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "keeper",
+      "name": "read_protected_tables",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "keeper",
+      "name": "issue_a_budget",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "keeper",
+      "name": "rewrite_the_audit",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "keeper",
+      "name": "raise_a_budget",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "keeper",
+      "name": "open_the_gate",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "keeper",
+      "name": "create_a_role",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "keeper",
+      "name": "become_an_agent",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "reach",
+      "name": "login_cannot_connect_to_another_database",
+      "status": "HOLDS",
+      "detail": "psql: error: connection to server at \"127.0.0.1\", port 5432 failed: FATAL:  permission denied for database \"agentdb_test_guardother_9f23a8d9"
+    },
+    {
+      "group": "reach",
+      "name": "other_databases_still_open_to_any_login",
+      "status": "NOTE",
+      "detail": "4 non-test databases on this server: their owners decide; each needs REVOKE CONNECT ... FROM PUBLIC"
+    },
+    {
+      "group": "expiry",
+      "name": "expired_login_cannot_reconnect",
+      "status": "HOLDS",
+      "detail": "psql: error: connection to server at \"127.0.0.1\", port 5432 failed: FATAL:  password authentication failed for user \"gua"
+    },
+    {
+      "group": "expiry",
+      "name": "a_session_opened_before_expiry_survives_it",
+      "status": "HOLDS",
+      "detail": "'still alive': expiry stops only new connections, so the keeper must end it"
+    },
+    {
+      "group": "expiry",
+      "name": "keeper_ends_the_expired_logins_sessions",
+      "status": "HOLDS",
+      "detail": "{'guard_atk_d6b5f9867e48': 'login expired'}"
+    },
+    {
+      "group": "retire",
+      "name": "retiring_a_login_drops_it",
+      "status": "HOLDS",
+      "detail": "0 left"
+    },
+    {
+      "group": "retire",
+      "name": "a_retired_login_cannot_connect",
+      "status": "HOLDS",
+      "detail": "psql: error: connection to server at \"127.0.0.1\", port 5432 failed: FATAL:  password authentication failed for user \"gua"
+    },
+    {
+      "group": "retire",
+      "name": "a_retired_name_cannot_be_issued_again",
+      "status": "HOLDS",
+      "detail": "refused 23505"
+    },
+    {
+      "group": "retire",
+      "name": "self_check_stays_clean",
+      "status": "HOLDS",
+      "detail": "[]"
+    },
+    {
+      "group": "control",
+      "name": "delete_every_order",
+      "status": "HOLDS",
+      "detail": "got through on the plain login, rolled back"
+    },
+    {
+      "group": "control",
+      "name": "set_every_price_to_zero",
+      "status": "HOLDS",
+      "detail": "got through on the plain login, rolled back"
+    },
+    {
+      "group": "control",
+      "name": "fabricate_500_rows",
+      "status": "HOLDS",
+      "detail": "got through on the plain login, rolled back"
+    },
+    {
+      "group": "control",
+      "name": "delete_6_suppliers_and_their_cascade",
+      "status": "HOLDS",
+      "detail": "got through on the plain login, rolled back"
+    },
+    {
+      "group": "control",
+      "name": "nothing_was_kept",
+      "status": "HOLDS",
+      "detail": "tables the same"
+    },
+    {
+      "group": "review",
+      "name": "copy_in_500_rows_is_counted",
+      "status": "HOLDS",
+      "detail": "refused AB007"
+    },
+    {
+      "group": "review",
+      "name": "an_upsert_over_500_rows_is_counted",
+      "status": "HOLDS",
+      "detail": "refused AB007"
+    },
+    {
+      "group": "review",
+      "name": "a_merge_over_500_rows_is_counted",
+      "status": "HOLDS",
+      "detail": "refused AB007"
+    },
+    {
+      "group": "review",
+      "name": "a_writable_cte_is_counted",
+      "status": "HOLDS",
+      "detail": "refused AB007"
+    },
+    {
+      "group": "review",
+      "name": "a_definer_function_in_a_loop_is_counted",
+      "status": "HOLDS",
+      "detail": "refused AB007"
+    },
+    {
+      "group": "review",
+      "name": "none_of_that_changed_the_tables",
+      "status": "HOLDS",
+      "detail": "tables the same"
+    },
+    {
+      "group": "review",
+      "name": "an_agent_can_burn_sequence_values",
+      "status": "NOTE",
+      "detail": "accepted: inserts need USAGE on the sequence, which allows nextval; a 4-byte sequence could be run out this way, so a protected table should use bigint keys"
+    },
+    {
+      "group": "review",
+      "name": "an_agent_can_notify_the_applications_channels",
+      "status": "NOTE",
+      "detail": "accepted: NOTIFY needs no privilege, so an application that acts on a channel's messages trusts agents"
+    },
+    {
+      "group": "review",
+      "name": "an_agent_cannot_pass_its_table_rights_on",
+      "status": "HOLDS",
+      "detail": "exit 0; PUBLIC may update: f"
+    },
+    {
+      "group": "cli",
+      "name": "status_reports_without_changing_anything",
+      "status": "HOLDS",
+      "detail": "exit 0; 25 logins; "
+    },
+    {
+      "group": "cli",
+      "name": "one_keeper_round_exits_clean",
+      "status": "HOLDS",
+      "detail": "clean"
+    },
+    {
+      "group": "cli",
+      "name": "run_keeps_the_keeper_going_while_the_agent_runs",
+      "status": "HOLDS",
+      "detail": "exit 0: ['ended by the keeper']"
+    },
+    {
+      "group": "cli",
+      "name": "run_retires_the_login_when_the_command_ends",
+      "status": "HOLDS",
+      "detail": "guard_atk_4d6a32c4bfc8: 0 left"
+    },
+    {
+      "group": "cli",
+      "name": "undo_from_the_command_line",
+      "status": "HOLDS",
+      "detail": "exit 0; {'login': 'guard_atk_1711ce61d81e', 'undone': 1, 'refused': None, 'remaining': 0}"
+    },
+    {
+      "group": "cli",
+      "name": "report_says_what_a_login_changed",
+      "status": "HOLDS",
+      "detail": "exit 0; {'shop.products': {'deleted': 0, 'updated': 1, 'inserted': 0}}"
+    },
+    {
+      "group": "cli",
+      "name": "freeze_stops_agents_at_once",
+      "status": "HOLDS",
+      "detail": "write refused AB000; reason \"code freeze: it's release day\""
+    },
+    {
+      "group": "cli",
+      "name": "the_owner_can_unfreeze",
+      "status": "HOLDS",
+      "detail": "exit 0"
+    },
+    {
+      "group": "cli",
+      "name": "run_keeps_the_operators_environment_back",
+      "status": "HOLDS",
+      "detail": "absent meant for it"
+    },
+    {
+      "group": "cli",
+      "name": "a_backup_is_kept_only_after_it_restores",
+      "status": "HOLDS",
+      "detail": "exit 0; ['agentdb_test_guardsuite_9f23a8d9-20261109-221103.dump']; {'shop.products': 4000, 'shop.orders': 20001, 'shop.suppliers': 50, 'shop.settings': 12, 'shop.atk_flags': 15, 'shop.atk_setting': 1, 'shop.atk_fresh': 10, 'shop.atk_p1': 0, 'shop.atk_c1': 0, 'shop.atk_p2': 0, 'shop.atk_c2': 0, 'shop.atk_p3': 0, 'shop.atk_c3': 0, 'shop.atk_p4': 0, 'shop.atk_c4': 0, 'guard.audit': 20091}"
+    },
+    {
+      "group": "cli",
+      "name": "only_the_newest_backups_are_kept",
+      "status": "HOLDS",
+      "detail": "exit 0; 1 kept"
+    },
+    {
+      "group": "cli",
+      "name": "backup_leaves_no_scratch_database",
+      "status": "HOLDS",
+      "detail": "0 left"
+    },
+    {
+      "group": "timing",
+      "name": "one_row_update",
+      "status": "NOTE",
+      "detail": "median ms over 30: application 7.13, agent 12.43, on this machine"
+    },
+    {
+      "group": "timing",
+      "name": "one_self_check",
+      "status": "NOTE",
+      "detail": "median 27.4 ms over 10, on this machine"
+    },
+    {
+      "group": "sandbox",
+      "name": "this_machines_own_route_to_superuser_is_found",
+      "status": "HOLDS",
+      "detail": "exit 1, gaps: ['no_other_credentials_in_the_environment', 'no_credential_files_within_reach', 'cannot_run_wsl', 'cannot_reach_docker_engine']"
+    },
+    {
+      "group": "sandbox",
+      "name": "real_container",
+      "status": "NOTE",
+      "detail": "not run: the container check is Forkpoint's and unchanged"
+    },
+    {
+      "group": "cleanup",
+      "name": "no_test_login_is_left",
+      "status": "HOLDS",
+      "detail": "none"
+    }
+  ]
+}

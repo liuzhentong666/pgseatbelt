@@ -1,0 +1,280 @@
+[HOLDS] normal self_check_is_clean_after_install: []
+[HOLDS] normal a_write_lands_on_the_live_table_at_once: 10.0 -> 11.0
+[HOLDS] normal the_audit_names_the_real_login: guard_atk_03c461c40506
+[HOLDS] normal budget_charged_for_the_row: rows_left=49, bytes_left=4999631
+[HOLDS] normal the_applications_own_writes_pass_untouched: rc=0; audit rows stay 1
+[HOLDS] escalate reset_role_leaves_nothing: guard_atk_03c461c40506/guard_atk_03c461c40506/off
+[HOLDS] escalate set_role_postgres: refused 42501
+[HOLDS] escalate set_role_old_client: refused 42501
+[HOLDS] escalate set_role_worker: refused 42501
+[HOLDS] escalate set_role_keeper: refused 42501
+[HOLDS] escalate set_role_broker: refused 42501
+[HOLDS] escalate set_session_authorization: refused 42501
+[HOLDS] escalate create_role: refused 42501
+[HOLDS] escalate create_database: refused 42501
+[HOLDS] escalate create_schema: refused 42501
+[HOLDS] escalate create_temp_table: refused 42501
+[HOLDS] escalate create_table_in_public: refused 42501
+[HOLDS] escalate create_function_in_public: refused 42501
+[HOLDS] escalate alter_self_superuser: refused 42501
+[HOLDS] escalate alter_self_createrole: refused 42501
+[HOLDS] escalate alter_self_bypassrls: refused 42501
+[HOLDS] escalate extend_own_expiry: refused 42501
+[HOLDS] escalate raise_own_connection_limit: refused 42501
+[HOLDS] escalate grant_self_the_keeper_role: refused 42501
+[HOLDS] escalate grant_self_set_on_worker: refused 42501
+[HOLDS] escalate session_replication_role: refused 42501
+[HOLDS] escalate own_temp_file_limit: refused 42501
+[HOLDS] escalate own_temp_file_limit_default: refused 42501
+[HOLDS] escalate alter_database: refused 42501
+[HOLDS] escalate alter_system: refused 42501
+[HOLDS] escalate reload_config: refused 42501
+[HOLDS] escalate read_server_file: refused 42501
+[HOLDS] escalate list_server_directory: refused 42501
+[HOLDS] escalate copy_to_program: refused 42501
+[HOLDS] escalate copy_to_server_file: refused 42501
+[HOLDS] escalate copy_from_server_file: refused 42501
+[HOLDS] escalate read_password_hashes: refused 42501
+[HOLDS] escalate change_the_role_catalog: refused 42501
+[HOLDS] escalate create_extension: refused 42501
+[HOLDS] escalate reset_all_keeps_its_temp_file_limit: 100MB
+[HOLDS] guard drop_a_protected_table: refused 42501
+[HOLDS] guard alter_a_protected_table: refused 42501
+[HOLDS] guard truncate_a_protected_table: refused 42501
+[HOLDS] guard disable_the_guard_trigger: refused 42501
+[HOLDS] guard drop_the_guard_trigger: refused 42501
+[HOLDS] guard disable_the_commit_check: refused 42501
+[HOLDS] guard write_an_unprotected_table: refused 42501
+[HOLDS] guard create_an_index: refused 42501
+[HOLDS] guard reindex: refused 42501
+[HOLDS] guard cluster: refused 42501
+[HOLDS] guard comment_on_a_table: refused 42501
+[HOLDS] guard read_the_audit: refused 42501
+[HOLDS] guard rewrite_the_audit: refused 42501
+[HOLDS] guard delete_the_audit: refused 42501
+[HOLDS] guard insert_into_the_audit: refused 42501
+[HOLDS] guard raise_own_budget: refused 42501
+[HOLDS] guard read_the_budgets: refused 42501
+[HOLDS] guard issue_own_budget: refused 42501
+[HOLDS] guard reset_own_spend: refused 42501
+[HOLDS] guard forge_an_intent: refused 42501
+[HOLDS] guard clear_the_commit_check: refused 42501
+[HOLDS] guard mark_own_changes_undone: refused 42501
+[HOLDS] guard open_the_gate: refused 42501
+[HOLDS] guard change_the_fingerprint: refused 42501
+[HOLDS] guard allow_a_function: refused 42501
+[HOLDS] guard allow_a_function_the_owners_way: refused 42501
+[HOLDS] guard unprotect_a_table: refused 42501
+[HOLDS] guard protect: refused 42501
+[HOLDS] guard freeze: refused 42501
+[HOLDS] guard unfreeze: refused 42501
+[HOLDS] guard stop_another_agent: refused 42501
+[HOLDS] guard undo: refused 42501
+[HOLDS] guard report: refused 42501
+[HOLDS] guard run_the_self_check: refused 42501
+[HOLDS] guard read_the_self_check: refused 42501
+[HOLDS] guard read_the_status: refused 42501
+[HOLDS] guard end_sessions: refused 42501
+[HOLDS] guard list_the_agents: refused 42501
+[HOLDS] guard inner_refuse: refused 42501
+[HOLDS] guard inner_gate: refused 42501
+[HOLDS] guard inner_is_agent: refused 42501
+[HOLDS] guard inner_fingerprint: refused 42501
+[HOLDS] guard snapshot_isolation_is_refused: refused AB006
+[HOLDS] guard serializable_is_refused: refused AB006
+[ NOTE] guard an_agent_may_lock_a_protected_table: accepted (UPDATE allows it); the keeper ends it, see the hold group
+[ NOTE] guard select_for_update_is_allowed: accepted: agents need it to read what they will write
+[ NOTE] guard vacuum_full_by_an_agent: exit 0; 'WARNING:  01000: permission denied to vacuum "products", skipping it\nLOCATION:  vacuum_is_relation_owner, vacuum.c:743'
+[HOLDS] guard protected_tables_unchanged_after_all_of_this: all four tables identical
+[ NOTE] agents overwriting_another_agents_row_is_recorded_as_the_overwriter: accepted, recorded as the overwriter; undo of the first then stops at this row
+[HOLDS] agents become_another_agent: refused 42501
+[HOLDS] agents share_its_own_login_with_another: refused 42501
+[HOLDS] agents end_another_agents_session: refused 42501
+[HOLDS] agents cannot_read_another_agents_statements: '<insufficient privilege>'
+[HOLDS] agents status_shows_only_itself: {"login": "guard_atk_03c461c40506", "frozen": null, "changed": {"shop.products": 2}, "rows_left": 48, "bytes_left": 4999255, "valid_until": "2026-11-09T23:05:07.425961+08:00", "max_table_share": 0.1}
+[HOLDS] budget statement_over_budget: refused AB002
+[HOLDS] budget over_budget_statement_left_the_tables_alone: tables the same
+[HOLDS] budget catching_the_refusal_keeps_nothing: the DO block committed, tables the same
+[HOLDS] budget failed_statements_cost_nothing: rows_left=10
+[HOLDS] budget many_small_statements_stop_at_the_budget: 2 of 4 statements of 4 rows; 2 left
+[HOLDS] budget two_sessions_cannot_spend_the_budget_twice: ['AB002', 'landed']; 8 left
+[HOLDS] budget a_huge_row_over_the_storage_budget: refused AB003
+[HOLDS] budget a_row_that_compresses_well_pays_full_size: refused AB003
+[HOLDS] budget no_budget_row_means_no_writes: refused AB002
+[HOLDS] budget broker_cannot_top_up_a_budget: refused 23505
+[HOLDS] incident drop_the_database: refused 42501
+[HOLDS] incident drop_the_app_schema: refused 42501
+[HOLDS] incident drop_the_guard_schema: refused 42501
+[HOLDS] incident drop_the_audit_table: refused 42501
+[HOLDS] incident drop_a_constraint: refused 42501
+[HOLDS] incident take_over_ownership: refused 42501
+[HOLDS] incident create_a_shadow_database: refused 42501
+[HOLDS] incident create_a_table_beside_the_data: refused 42501
+[HOLDS] incident deleting_the_whole_table_is_refused: refused AB007
+[HOLDS] incident an_update_with_no_where_is_refused: refused AB007
+[HOLDS] incident the_refusal_says_how_the_change_can_land: ERROR:  AB007: Too large a share of shop.products
+DETAIL:  {"rule": "beyond 20 rows, at most max_table_share of the table", "login": "guard_atk_f10bf5e50453", "size_before": 4000, "max_table_share": 0.1, "changed_by_this
+[HOLDS] incident hundreds_of_fabricated_rows_are_refused: refused AB007
+[HOLDS] incident a_cascade_from_a_small_delete_is_counted: refused AB007
+[HOLDS] incident none_of_that_reached_the_tables: tables the same
+[HOLDS] incident small_statements_cannot_add_up_past_the_share: ['landed', 'landed', 'AB007']
+[HOLDS] incident a_read_only_login_can_read: 4000
+[HOLDS] incident a_read_only_login_cannot_write: refused AB002
+[HOLDS] incident the_report_says_what_really_happened: {"shop.orders": {"deleted": 20001, "updated": 0, "inserted": 0}}
+[HOLDS] incident a_wiped_table_comes_back_identical: 0 rows after the wipe; identical after undo: True; undo took 5.9 s
+[HOLDS] incident the_report_says_it_was_undone: 20001 of 20001 changes undone
+[HOLDS] incident an_agent_cannot_read_the_reports: refused 42501
+[HOLDS] incident turn_off_its_statement_log: refused 42501
+[HOLDS] incident reset_its_statement_log: refused 42501
+[HOLDS] incident a_refused_attempt_leaves_a_trace: refused AB007; log: 2026-11-09 22:06:59.403 CST [1408089] guard_atk_03c461c40506@agentdb_test_guardsuite_9f23a8d9 LOG:  statement: UPDATE shop.settings SET value='x_marker_14d233535918';
+[HOLDS] stop stopped_login_cannot_write: refused AB002
+[HOLDS] stop stopped_login_cannot_write_a_held_row: refused AB002
+[HOLDS] stop stopped_login_never_queues_for_a_row_lock: answered in 0.5 s while the row was held
+[ NOTE] hold turning_off_timeouts_can_block_a_row: accepted; the application's write to that row got 55P03
+[HOLDS] hold keeper_ends_an_idle_holder_and_writes_resume: ended {'guard_atk_03c461c40506': 'idle in transaction'}; next write rc=0
+[HOLDS] hold keeper_ends_a_holder_that_looks_busy: ended {'guard_atk_03c461c40506': 'transaction too long'}; next write rc=0
+[HOLDS] hold keeper_ends_an_idle_session_holding_an_advisory_lock: {'guard_atk_03c461c40506': 'idle holding an advisory lock'}
+[HOLDS] hold a_plainly_idle_session_is_left_alone: 'still here'; ended {}
+[ NOTE] hold an_agent_can_lock_a_whole_table: accepted; the application's read got 55P03
+[HOLDS] hold keeper_ends_a_table_lock_at_its_next_round: ended {'guard_atk_03c461c40506': 'holding or waiting for a table lock'}; next read rc=0
+[ NOTE] hold a_waiting_table_lock_queues_the_applications_reads: a new read behind it got 55P03
+[HOLDS] hold keeper_ends_a_session_waiting_for_a_table_lock: ended {'guard_atk_03c461c40506': 'holding or waiting for a table lock'}; next read rc=0
+[HOLDS] hold agent_cannot_end_the_keepers_session: refused 42501
+[HOLDS] hold keeper_cannot_end_a_superuser_session: refused 42501
+[HOLDS] hold prepared_transactions_cannot_outlive_a_session: refused 55000; max_prepared_transactions=0, and the self-check reports any other value
+[HOLDS] storage large_object_from_bytea: refused 42501
+[HOLDS] storage large_object_create: refused 42501
+[HOLDS] storage large_object_creat: refused 42501
+[HOLDS] storage temporary_table: refused 42501
+[HOLDS] storage own_role_settings_refuse_invented_names: refused 42501
+[ NOTE] storage own_role_settings_hold_some_data_outside_the_budget: accepted: 1000000 bytes of one letter, 11544 bytes compressed; one row per login, dropped with the login
+[ NOTE] storage write_ahead_log_messages: accepted: not kept, recycled with the log
+[HOLDS] undo bad_changes_landed: rows changed
+[HOLDS] undo undo_ends_the_logins_sessions: ''
+[HOLDS] undo undoes_every_change_by_the_login: 4 undone, 0 left, refused None
+[HOLDS] undo undo_returns_the_tables_to_the_same_rows: all four tables identical
+[HOLDS] undo nothing_was_rewritten: 4 of 4 audit rows still there
+[HOLDS] undo rerunning_undo_changes_nothing: {'login': 'guard_atk_57ecc29012f0', 'undone': 0, 'refused': None, 'remaining': 0}
+[HOLDS] undo an_undone_login_stays_stopped: refused AB002
+[HOLDS] undo an_open_transaction_cannot_hold_up_undo: finished in 1.8 s
+[HOLDS] undo undo_stops_at_newer_work_and_says_why: remaining 1; price 3.0
+[HOLDS] undo undo_finishes_once_the_newer_work_is_undone: 1 undone; price 10.0
+[HOLDS] incident wiping_a_table_smaller_than_the_free_rows_is_refused: refused AB007
+[HOLDS] incident a_small_table_cannot_be_rewritten_a_little_at_a_time: ['landed', 'AB007']
+[HOLDS] incident a_one_row_table_and_an_empty_table_still_take_ordinary_changes: ['landed', 'landed']
+[HOLDS] undo undo_puts_back_rows_linked_by_ordinary_foreign_keys: refused None; rows left: 0
+[HOLDS] drift a_trigger_function_beside_the_tables_is_no_problem: guard_broker may execute shop.atk_definer(), which runs as its owner; guard_keeper may execute shop.atk_definer(), which runs as its owner; guard_worker may execute shop.atk_definer(), which runs as its owner
+[HOLDS] drift a_definer_function_agents_can_call_is_found: guard_broker may execute shop.atk_definer(), which runs as its owner; guard_keeper may execute shop.atk_definer(), which runs as its owner; guard_worker may execute shop.atk_definer(), which runs as its owner
+[HOLDS] drift an_allowed_definer_function_is_no_problem: guard_broker may execute shop.atk_definer(), which runs as its owner; guard_keeper may execute shop.atk_definer(), which runs as its owner; guard_worker may execute shop.atk_definer(), which runs as its owner
+[HOLDS] drift guard_trigger_disabled_is_found: disabled trigger shop.products.guard_row
+[HOLDS] drift guard_trigger_dropped_is_found: guard functions or triggers changed; guarded table without trigger guard_row: shop.products
+[HOLDS] drift intent_trigger_dropped_is_found: guard functions or triggers changed; guarded table without trigger !guard_intent: shop.products
+[HOLDS] drift audit_left_editable_is_found: disabled trigger guard.audit.immutable
+[HOLDS] drift commit_check_dropped_is_found: guard functions or triggers changed; guard table without trigger guard.commit_check.at_commit
+[HOLDS] drift write_grant_added_is_found: guard_worker may change shop.app_log
+[HOLDS] drift function_grant_added_is_found: guard_worker may execute guard.undo(name)
+[HOLDS] drift guard_read_grant_added_is_found: guard_worker may read guard.budget
+[HOLDS] drift schema_create_granted_is_found: guard_worker may create in schema shop
+[HOLDS] drift database_open_to_everyone_is_found: any role may connect to this database
+[HOLDS] drift temporary_tables_opened_is_found: guard_worker may create schemas or temporary tables in this database
+[HOLDS] drift large_objects_opened_is_found: guard_worker may create large objects
+[HOLDS] drift a_cascade_into_an_unprotected_table_is_found: changing shop.products cascades into shop.atk_reviews, which is not guarded
+[HOLDS] drift agent_login_made_superuser_is_found: agent login too strong: guard_atk_03c461c40506; superuser logins changed
+[HOLDS] drift agent_login_given_another_role_is_found: agent login guard_atk_03c461c40506 holds pg_read_server_files
+[HOLDS] drift worker_role_given_another_role_is_found: guard_worker holds pg_read_server_files
+[HOLDS] drift worker_role_can_log_in_is_found: guard_worker has attributes it must not have
+[HOLDS] drift keeper_given_unfreeze_is_found: guard_keeper may execute guard.unfreeze()
+[HOLDS] drift keeper_given_another_role_is_found: guard_keeper holds pg_read_server_files
+[HOLDS] drift broker_given_createdb_is_found: guard_broker has attributes it must not have
+[HOLDS] drift broker_given_another_role_to_hand_out_is_found: guard_broker holds pg_read_server_files
+[HOLDS] drift new_superuser_login_is_found: superuser logins changed
+[HOLDS] drift guard_function_rewritten_is_found: guard functions or triggers changed
+[HOLDS] drift an_allowed_definer_function_rewritten_is_found: shop.restock(bigint,integer) was allowed, but has changed since
+[HOLDS] drift a_role_holding_the_worker_role_through_another_is_found: agent login guard_atk_03c461c40506 holds guard_atk_mid_25d781dd
+[HOLDS] drift agent_login_with_no_expiry_is_found: agent login not built by the broker: guard_atk_03c461c40506
+[HOLDS] drift a_login_holding_the_worker_role_through_another_role_is_found: agent login guard_atk_98c66373c28e holds guard_atk_nest_724ce8e7; agent login not built by the broker: guard_atk_98c66373c28e; guard_atk_98c66373c28e holds guard_worker through another role
+[HOLDS] drift clean_again_after_every_repair: []
+[HOLDS] freeze a_change_begun_before_the_freeze_cannot_commit: refused AB000
+[HOLDS] freeze keepers_round_freezes_on_a_problem: guard_worker may execute guard.undo(name)
+[HOLDS] freeze keepers_round_ends_transactions_already_past_the_gate: [{'pid': 1409687, 'login': 'guard_atk_9321501f731a', 'reason': 'writing while frozen'}]
+[HOLDS] freeze a_write_past_the_commit_check_cannot_commit_after_the_freeze: tables the same
+[HOLDS] freeze frozen_insert_is_refused: refused AB000
+[HOLDS] freeze frozen_update_is_refused: refused AB000
+[HOLDS] freeze frozen_delete_is_refused: refused AB000
+[HOLDS] freeze reads_and_the_reason_still_work: guard_worker may execute guard.undo(name)
+[HOLDS] freeze protected_tables_can_still_be_read: 4000
+[HOLDS] freeze keeper_cannot_unfreeze: refused 42501
+[HOLDS] freeze broker_cannot_unfreeze: refused 42501
+[HOLDS] freeze agent_cannot_unfreeze: refused 42501
+[HOLDS] freeze tables_unchanged_while_frozen: tables the same
+[HOLDS] freeze fixing_the_cause_does_not_reopen_writes: still frozen; self-check clean
+[HOLDS] freeze undo_works_while_frozen: 1 undone
+[HOLDS] freeze writes_work_again_after_unfreezing: landed
+[HOLDS] freeze rerunning_the_install_accepts_the_guard_but_opens_nothing: problems []; still frozen: True
+[HOLDS] broker create_superuser: refused 42501
+[HOLDS] broker create_replication: refused 42501
+[HOLDS] broker create_bypassrls: refused 42501
+[HOLDS] broker create_createdb: refused 42501
+[HOLDS] broker grant_the_keeper_role: refused 42501
+[HOLDS] broker grant_server_files_role: refused 42501
+[HOLDS] broker alter_postgres: refused 42501
+[HOLDS] broker read_protected_tables: refused 42501
+[HOLDS] broker read_budgets: refused 42501
+[HOLDS] broker raise_a_budget: refused 42501
+[HOLDS] broker undo: refused 42501
+[HOLDS] broker drop_a_role_it_did_not_make: refused 42501
+[HOLDS] broker use_the_worker_role: refused 42501
+[HOLDS] keeper write_protected_tables: refused 42501
+[HOLDS] keeper read_protected_tables: refused 42501
+[HOLDS] keeper issue_a_budget: refused 42501
+[HOLDS] keeper rewrite_the_audit: refused 42501
+[HOLDS] keeper raise_a_budget: refused 42501
+[HOLDS] keeper open_the_gate: refused 42501
+[HOLDS] keeper create_a_role: refused 42501
+[HOLDS] keeper become_an_agent: refused 42501
+[HOLDS] reach login_cannot_connect_to_another_database: psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  permission denied for database "agentdb_test_guardother_9f23a8d9
+[ NOTE] reach other_databases_still_open_to_any_login: 4 non-test databases on this server: their owners decide; each needs REVOKE CONNECT ... FROM PUBLIC
+[HOLDS] expiry expired_login_cannot_reconnect: psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "gua
+[HOLDS] expiry a_session_opened_before_expiry_survives_it: 'still alive': expiry stops only new connections, so the keeper must end it
+[HOLDS] expiry keeper_ends_the_expired_logins_sessions: {'guard_atk_d6b5f9867e48': 'login expired'}
+[HOLDS] retire retiring_a_login_drops_it: 0 left
+[HOLDS] retire a_retired_login_cannot_connect: psql: error: connection to server at "127.0.0.1", port 5432 failed: FATAL:  password authentication failed for user "gua
+[HOLDS] retire a_retired_name_cannot_be_issued_again: refused 23505
+[HOLDS] retire self_check_stays_clean: []
+[HOLDS] control delete_every_order: got through on the plain login, rolled back
+[HOLDS] control set_every_price_to_zero: got through on the plain login, rolled back
+[HOLDS] control fabricate_500_rows: got through on the plain login, rolled back
+[HOLDS] control delete_6_suppliers_and_their_cascade: got through on the plain login, rolled back
+[HOLDS] control nothing_was_kept: tables the same
+[HOLDS] review copy_in_500_rows_is_counted: refused AB007
+[HOLDS] review an_upsert_over_500_rows_is_counted: refused AB007
+[HOLDS] review a_merge_over_500_rows_is_counted: refused AB007
+[HOLDS] review a_writable_cte_is_counted: refused AB007
+[HOLDS] review a_definer_function_in_a_loop_is_counted: refused AB007
+[HOLDS] review none_of_that_changed_the_tables: tables the same
+[ NOTE] review an_agent_can_burn_sequence_values: accepted: inserts need USAGE on the sequence, which allows nextval; a 4-byte sequence could be run out this way, so a protected table should use bigint keys
+[ NOTE] review an_agent_can_notify_the_applications_channels: accepted: NOTIFY needs no privilege, so an application that acts on a channel's messages trusts agents
+[HOLDS] review an_agent_cannot_pass_its_table_rights_on: exit 0; PUBLIC may update: f
+[HOLDS] cli status_reports_without_changing_anything: exit 0; 25 logins; 
+[HOLDS] cli one_keeper_round_exits_clean: clean
+[HOLDS] cli run_keeps_the_keeper_going_while_the_agent_runs: exit 0: ['ended by the keeper']
+[HOLDS] cli run_retires_the_login_when_the_command_ends: guard_atk_4d6a32c4bfc8: 0 left
+[HOLDS] cli undo_from_the_command_line: exit 0; {'login': 'guard_atk_1711ce61d81e', 'undone': 1, 'refused': None, 'remaining': 0}
+[HOLDS] cli report_says_what_a_login_changed: exit 0; {'shop.products': {'deleted': 0, 'updated': 1, 'inserted': 0}}
+[HOLDS] cli freeze_stops_agents_at_once: write refused AB000; reason "code freeze: it's release day"
+[HOLDS] cli the_owner_can_unfreeze: exit 0
+[HOLDS] cli run_keeps_the_operators_environment_back: absent meant for it
+[HOLDS] cli a_backup_is_kept_only_after_it_restores: exit 0; ['agentdb_test_guardsuite_9f23a8d9-20261109-221103.dump']; {'shop.products': 4000, 'shop.orders': 20001, 'shop.suppliers': 50, 'shop.settings': 12, 'shop.atk_flags': 15, 'shop.atk_setting': 1, 'shop.atk_fresh': 1
+[HOLDS] cli only_the_newest_backups_are_kept: exit 0; 1 kept
+[HOLDS] cli backup_leaves_no_scratch_database: 0 left
+[ NOTE] timing one_row_update: median ms over 30: application 7.13, agent 12.43, on this machine
+[ NOTE] timing one_self_check: median 27.4 ms over 10, on this machine
+[HOLDS] sandbox this_machines_own_route_to_superuser_is_found: exit 1, gaps: ['no_other_credentials_in_the_environment', 'no_credential_files_within_reach', 'cannot_run_wsl', 'cannot_reach_docker_engine']
+[ NOTE] sandbox real_container: not run: the container check is Forkpoint's and unchanged
+[HOLDS] cleanup no_test_login_is_left: none
+{
+ "holds": 258,
+ "notes": 15,
+ "gaps": [],
+ "left_behind": "0 databases, 0 guard roles"
+}

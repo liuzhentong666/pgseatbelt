@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+connection.local.json
+connection.*.local.json
+*.pem
+pgpass.conf
