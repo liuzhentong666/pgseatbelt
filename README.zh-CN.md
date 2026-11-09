@@ -1,8 +1,10 @@
-# agent-guard
+# pgseatbelt
 
 [English](README.md)
 
-限制 AI Agent 自己的 PostgreSQL 登录能对已有应用的表做什么，即使 Agent 自己写 SQL 也一样，而且不需要改动应用。"agent-guard" 是暂定名。
+**Postgres 的安全带。** 它限制 AI Agent 自己的 PostgreSQL 登录能对已有应用的表做什么，即使 Agent 自己写 SQL 也一样，而且不需要改动应用。就像安全带一样，它不妨碍正常工作，只在出问题时限制损害。
+
+在数据库内部它用一个简称 `guard`：`guard` 模式、`guard.sql`、`guard.py`，以及角色 `guard_worker`、`guard_keeper` 和 `guard_broker`。
 
 **状态：** 原型（2026-11-09）。只在一台笔记本上用下面的攻击套件测试过，只由编写它的助手审查过，尚未用于真实数据。
 

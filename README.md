@@ -1,9 +1,14 @@
-# agent-guard
+# pgseatbelt
 
 [中文](README.zh-CN.md)
 
-Limits what an AI agent's own PostgreSQL login can do to an existing application's tables, even
-when the agent writes raw SQL, without changing the application. "agent-guard" is a working name.
+**A seatbelt for Postgres.** It limits what an AI agent's own PostgreSQL login can do to an
+existing application's tables, even when the agent writes raw SQL, without changing the
+application. Like a seatbelt, it stays out of the way of normal work and limits the damage when
+something goes wrong.
+
+Inside the database it goes by a short name, `guard`: the `guard` schema, `guard.sql`, `guard.py`,
+and the roles `guard_worker`, `guard_keeper` and `guard_broker`.
 
 **Status:** a prototype (2026-11-09). Tested on one laptop with the attack suite below, reviewed
 only by the assistant that wrote it, and not yet used on real data.
