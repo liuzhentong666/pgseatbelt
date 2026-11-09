@@ -18,7 +18,20 @@
 --   stronger than ROW EXCLUSIVE (an agent that may UPDATE a table may LOCK it).
 -- * Codes: AB000 frozen; AB002 row budget; AB003 storage budget; AB005 changed since (undo);
 --   AB006 not READ COMMITTED; AB007 too large a share of a table, or TRUNCATE.
+-- * guard.py uninstall takes all of this out again and puts back what guard.installed_over recorded.
 BEGIN;
+CREATE SCHEMA IF NOT EXISTS guard;
+REVOKE ALL ON SCHEMA guard FROM PUBLIC;
+-- What install takes from PUBLIC outside the guard's own schema, as it was before the first install,
+-- so that uninstall puts back exactly that and opens nothing that was closed before.
+CREATE TABLE IF NOT EXISTS guard.installed_over(one boolean PRIMARY KEY DEFAULT true CHECK (one),
+  public_connect boolean NOT NULL, public_temporary boolean NOT NULL, public_large_objects boolean NOT NULL,
+  at timestamptz NOT NULL DEFAULT clock_timestamp());
+INSERT INTO guard.installed_over(public_connect, public_temporary, public_large_objects)
+SELECT has_database_privilege('public', current_database(), 'CONNECT'),
+       has_database_privilege('public', current_database(), 'TEMPORARY'),
+       has_function_privilege('public', 'pg_catalog.lo_create(oid)', 'EXECUTE')
+ON CONFLICT DO NOTHING;
 DO $roles$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'guard_worker') THEN

@@ -1,7 +1,9 @@
 """Give each agent its own login on a database the guard protects, and keep the guard around those logins.
 
   install   run guard.sql as the owner, and protect the tables named with --protect
-  run       issue a login, run a command with it in PGUSER, PGPASSWORD and the like, keep the keeper's
+  uninstall take it all out again as the owner, saving the audit log first; --drop-roles also drops
+            the three roles and the logins the broker issued
+  run      issue a login, run a command with it in PGUSER, PGPASSWORD and the like, keep the keeper's
             rounds going meanwhile, and retire the login when the command ends
   status    frozen or not, what the self-check finds, each login's budget
   keep      the keeper's rounds alone: self-check (a problem freezes writes), end stuck sessions
@@ -11,7 +13,7 @@
   backup    dump the database outside itself, and keep the dump only if it restores
 
 A port of Forkpoint's agent_boundary.py (1273af5) to guard.sql. Every command needs --database. It runs
-as guard_broker and guard_keeper, with install, backup and unfreeze as the owner, and has to run where
+as guard_broker and guard_keeper, with install, uninstall, backup and unfreeze as the owner, and has to run where
 agents cannot reach it or its connection config. The password is random, never leaves this process
 except in the command's environment, and reaches the server only as a SCRAM verifier.
 """
@@ -63,6 +65,102 @@ def install(owner, database, protect=()):
             raise ValueError(f"Not a schema-qualified table name: {table}")
         owner.sql(f"SELECT guard.protect('{table}');", database)
     return json.loads(owner.sql("SELECT guard.boundary_problems();", database))
+
+
+AUDIT_SQL = """SELECT json_build_object('database', current_database(), 'saved_at', clock_timestamp(),
+  'audit', (SELECT coalesce(json_agg(a ORDER BY a.id), '[]') FROM guard.audit a),
+  'undone', (SELECT coalesce(json_agg(u ORDER BY u.audit_id), '[]') FROM guard.undone u),
+  'budgets', (SELECT coalesce(json_agg(b ORDER BY b.login), '[]') FROM guard.budget b));"""
+
+# One transaction: the guard's triggers off the protected tables, every grant to the three roles revoked
+# (CASCADE takes the CONNECT the broker gave each agent login with it), PUBLIC's rights put back as
+# guard.installed_over recorded them, and the guard's schema dropped.
+UNINSTALL_SQL = """BEGIN;
+DO $uninstall$
+DECLARE was guard.installed_over; x record; roles text := 'guard_worker, guard_keeper, guard_broker';
+BEGIN
+  SELECT * INTO was FROM guard.installed_over;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'guard.installed_over is empty, so what install changed is unknown; nothing was changed';
+  END IF;
+  FOR x IN SELECT target FROM guard.guarded LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON %s', '!guard_intent', x.target);
+    EXECUTE format('DROP TRIGGER IF EXISTS guard_statement ON %s', x.target);
+    EXECUTE format('DROP TRIGGER IF EXISTS guard_truncate ON %s', x.target);
+    EXECUTE format('DROP TRIGGER IF EXISTS guard_row ON %s', x.target);
+  END LOOP;
+  FOR x IN SELECT DISTINCT c.oid::regclass AS name, c.relkind FROM pg_class c, aclexplode(c.relacl) a
+           WHERE a.grantee IN ('guard_worker'::regrole, 'guard_keeper'::regrole, 'guard_broker'::regrole)
+             AND c.relnamespace <> 'guard'::regnamespace LOOP
+    EXECUTE format('REVOKE ALL ON %s %s FROM %s CASCADE', CASE WHEN x.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END, x.name, roles);
+  END LOOP;
+  FOR x IN SELECT DISTINCT p.oid::regprocedure AS name FROM pg_proc p, aclexplode(p.proacl) a
+           WHERE a.grantee IN ('guard_worker'::regrole, 'guard_keeper'::regrole, 'guard_broker'::regrole)
+             AND p.pronamespace <> 'guard'::regnamespace LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %s CASCADE', x.name, roles);
+  END LOOP;
+  FOR x IN SELECT DISTINCT n.nspname FROM pg_namespace n, aclexplode(n.nspacl) a
+           WHERE a.grantee IN ('guard_worker'::regrole, 'guard_keeper'::regrole, 'guard_broker'::regrole) AND n.nspname <> 'guard' LOOP
+    EXECUTE format('REVOKE ALL ON SCHEMA %I FROM %s CASCADE', x.nspname, roles);
+  END LOOP;
+  EXECUTE format('REVOKE ALL ON DATABASE %I FROM %s CASCADE', current_database(), roles);
+  IF was.public_connect THEN EXECUTE format('GRANT CONNECT ON DATABASE %I TO PUBLIC', current_database()); END IF;
+  IF was.public_temporary THEN EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO PUBLIC', current_database()); END IF;
+  IF was.public_large_objects THEN
+    GRANT EXECUTE ON FUNCTION pg_catalog.lo_from_bytea(oid, bytea), pg_catalog.lo_create(oid), pg_catalog.lo_creat(integer) TO PUBLIC;
+  END IF;
+END $uninstall$;
+DROP SCHEMA guard CASCADE;
+COMMIT;"""
+
+
+def uninstall(owner, database, audit_to, drop_roles=False):
+    """Take the guard out of a database, as its superuser owner, and put back what install changed.
+
+    Agents are stopped first and the audit log is saved to a file in audit_to, because it is the only
+    record of what they did. With drop_roles, the three roles and the logins the broker issued are
+    dropped too, which is refused before anything changes while another database still has the guard.
+    Data the agents changed stays as it is: undo first for anything that should go back.
+    """
+    database_name(database)
+    if owner.sql("SELECT to_regnamespace('guard') IS NOT NULL;", database) != "t":
+        raise ValueError(f"The guard is not installed in {database}")
+    if drop_roles:
+        others = [name for name in owner.sql("SELECT coalesce(string_agg(datname, ' '), '') FROM pg_database "
+                                             "WHERE datallowconn AND datname <> current_database();", database).split()
+                  if owner.sql("SELECT to_regnamespace('guard') IS NOT NULL;", name) == "t"]
+        if others:
+            raise ValueError("The guard is still installed in " + ", ".join(others) +
+                             "; its roles are shared there, so nothing was changed")
+    # The logins the broker issued: direct members of guard_worker that can log in.
+    issued = owner.sql("""SELECT coalesce(string_agg(r.rolname, ' ' ORDER BY r.rolname), '') FROM pg_auth_members m
+      JOIN pg_roles r ON r.oid = m.member WHERE m.roleid = 'guard_worker'::regrole AND r.rolcanlogin;""", database).split()
+    end = ("SELECT count(pg_terminate_backend(a.pid)) FROM pg_stat_activity a WHERE a.datname = current_database() "
+           "AND a.usesysid IN (SELECT guard.agent_logins());")
+    owner.sql("SELECT guard.freeze('the guard is being uninstalled');", database)
+    owner.sql(end, database)
+    record = owner.sql(AUDIT_SQL, database)
+    saved = json.loads(record)
+    folder = Path(audit_to)
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = owner.sql("SELECT to_char(clock_timestamp(),'YYYYMMDD-HH24MISS');", database)
+    path = folder / f"{database}-guard-audit-{stamp}.json"
+    with path.open("xb") as out:
+        out.write(record.encode("utf-8"))
+    owner.sql(UNINSTALL_SQL, database)
+    literal = lambda name: "'" + name.replace("'", "''") + "'"
+    identifier = lambda name: '"' + name.replace('"', '""') + '"'
+    if issued:
+        owner.sql("SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE datname = current_database() "
+                  "AND usename = ANY(ARRAY[" + ",".join(literal(name) for name in issued) + "]::name[]);", database)
+    result = dict(database=database, audit_file=str(path), audit_rows=len(saved["audit"]), logins_cut_off=issued,
+                  roles_dropped=[])
+    if drop_roles:
+        names = issued + ["guard_broker", "guard_keeper", "guard_worker"]
+        owner.sql("REVOKE SET ON PARAMETER temp_file_limit, log_statement FROM guard_broker;\n" +
+                  "".join(f"DROP ROLE {identifier(name)};\n" for name in names), database)
+        result["roles_dropped"] = names
+    return result
 
 
 def issue_login(broker, database, rows, size, hours, connections=4, temp_file_limit="100MB", prefix="agent",
@@ -242,6 +340,10 @@ def main():
     actions = parser.add_subparsers(dest="action", required=True)
     setup = actions.add_parser("install", help="run guard.sql as the owner and protect tables")
     setup.add_argument("--protect", action="append", default=[], help="a schema-qualified table agents may write; repeat")
+    remove = actions.add_parser("uninstall", help="take the guard out as the owner, saving its audit log first")
+    remove.add_argument("--audit-to", required=True, help="a folder for the audit log, the only record of what agents did")
+    remove.add_argument("--drop-roles", action="store_true",
+                        help="also drop the three guard roles and the logins the broker issued (refused while another database has the guard)")
     start = actions.add_parser("run", help="run a command under a new agent login")
     start.add_argument("--rows", type=int, default=1000, help="rows it may change, for its whole life")
     start.add_argument("--bytes", type=int, default=10_000_000, help="bytes of audit it may cause, for its whole life")
@@ -281,6 +383,10 @@ def main():
         if args.action == "install":
             owner = connect(args, None)
             print(json.dumps(dict(problems=install(owner, owner.settings["database"], args.protect)), indent=2))
+            return
+        if args.action == "uninstall":
+            owner = connect(args, None)
+            print(json.dumps(uninstall(owner, owner.settings["database"], args.audit_to, args.drop_roles), indent=2))
             return
         if args.action == "status":
             print(json.dumps(json.loads(connect(args, KEEPER).sql("SELECT guard.boundary_status();")), indent=2))

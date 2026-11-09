@@ -1,5 +1,5 @@
 {
-  "database": "agentdb_test_guardsuite_9f23a8d9",
+  "database": "agentdb_test_guardsuite_c260f162",
   "server": "PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
   "guard_roles_existed_before": null,
   "problems_before_allowing_restock": [
@@ -28,7 +28,7 @@
       "group": "normal",
       "name": "the_audit_names_the_real_login",
       "status": "HOLDS",
-      "detail": "guard_atk_03c461c40506"
+      "detail": "guard_atk_ca32ba82f544"
     },
     {
       "group": "normal",
@@ -46,7 +46,7 @@
       "group": "escalate",
       "name": "reset_role_leaves_nothing",
       "status": "HOLDS",
-      "detail": "guard_atk_03c461c40506/guard_atk_03c461c40506/off"
+      "detail": "guard_atk_ca32ba82f544/guard_atk_ca32ba82f544/off"
     },
     {
       "group": "escalate",
@@ -574,7 +574,7 @@
       "group": "agents",
       "name": "status_shows_only_itself",
       "status": "HOLDS",
-      "detail": "{\"login\": \"guard_atk_03c461c40506\", \"frozen\": null, \"changed\": {\"shop.products\": 2}, \"rows_left\": 48, \"bytes_left\": 4999255, \"valid_until\": \"2026-11-09T23:05:07.425961+08:00\", \"max_table_share\": 0.1}"
+      "detail": "{\"login\": \"guard_atk_ca32ba82f544\", \"frozen\": null, \"changed\": {\"shop.products\": 2}, \"rows_left\": 48, \"bytes_left\": 4999255, \"valid_until\": \"2026-11-09T23:43:07.948138+08:00\", \"max_table_share\": 0.1}"
     },
     {
       "group": "budget",
@@ -700,7 +700,7 @@
       "group": "incident",
       "name": "the_refusal_says_how_the_change_can_land",
       "status": "HOLDS",
-      "detail": "ERROR:  AB007: Too large a share of shop.products\nDETAIL:  {\"rule\": \"beyond 20 rows, at most max_table_share of the table\", \"login\": \"guard_atk_f10bf5e50453\", \"size_before\": 4000, \"max_table_share\": 0.1, \"changed_by_this_login\": 401, \"existing_changed_by_this_login\": 401}\nHINT:  Nothing in this stat"
+      "detail": "ERROR:  AB007: Too large a share of shop.products\nDETAIL:  {\"rule\": \"beyond 20 rows, at most max_table_share of the table\", \"login\": \"guard_atk_298239dc59db\", \"size_before\": 4000, \"max_table_share\": 0.1, \"changed_by_this_login\": 401, \"existing_changed_by_this_login\": 401}\nHINT:  Nothing in this stat"
     },
     {
       "group": "incident",
@@ -748,7 +748,7 @@
       "group": "incident",
       "name": "a_wiped_table_comes_back_identical",
       "status": "HOLDS",
-      "detail": "0 rows after the wipe; identical after undo: True; undo took 5.9 s"
+      "detail": "0 rows after the wipe; identical after undo: True; undo took 5.8 s"
     },
     {
       "group": "incident",
@@ -778,7 +778,7 @@
       "group": "incident",
       "name": "a_refused_attempt_leaves_a_trace",
       "status": "HOLDS",
-      "detail": "refused AB007; log: 2026-11-09 22:06:59.403 CST [1408089] guard_atk_03c461c40506@agentdb_test_guardsuite_9f23a8d9 LOG:  statement: UPDATE shop.settings SET value='x_marker_14d233535918';"
+      "detail": "refused AB007; log: 2026-11-09 22:44:45.711 CST [1433736] guard_atk_ca32ba82f544@agentdb_test_guardsuite_c260f162 LOG:  statement: UPDATE shop.settings SET value='x_marker_280857a8f81d';"
     },
     {
       "group": "stop",
@@ -808,19 +808,19 @@
       "group": "hold",
       "name": "keeper_ends_an_idle_holder_and_writes_resume",
       "status": "HOLDS",
-      "detail": "ended {'guard_atk_03c461c40506': 'idle in transaction'}; next write rc=0"
+      "detail": "ended {'guard_atk_ca32ba82f544': 'idle in transaction'}; next write rc=0"
     },
     {
       "group": "hold",
       "name": "keeper_ends_a_holder_that_looks_busy",
       "status": "HOLDS",
-      "detail": "ended {'guard_atk_03c461c40506': 'transaction too long'}; next write rc=0"
+      "detail": "ended {'guard_atk_ca32ba82f544': 'transaction too long'}; next write rc=0"
     },
     {
       "group": "hold",
       "name": "keeper_ends_an_idle_session_holding_an_advisory_lock",
       "status": "HOLDS",
-      "detail": "{'guard_atk_03c461c40506': 'idle holding an advisory lock'}"
+      "detail": "{'guard_atk_ca32ba82f544': 'idle holding an advisory lock'}"
     },
     {
       "group": "hold",
@@ -838,7 +838,7 @@
       "group": "hold",
       "name": "keeper_ends_a_table_lock_at_its_next_round",
       "status": "HOLDS",
-      "detail": "ended {'guard_atk_03c461c40506': 'holding or waiting for a table lock'}; next read rc=0"
+      "detail": "ended {'guard_atk_ca32ba82f544': 'holding or waiting for a table lock'}; next read rc=0"
     },
     {
       "group": "hold",
@@ -850,7 +850,7 @@
       "group": "hold",
       "name": "keeper_ends_a_session_waiting_for_a_table_lock",
       "status": "HOLDS",
-      "detail": "ended {'guard_atk_03c461c40506': 'holding or waiting for a table lock'}; next read rc=0"
+      "detail": "ended {'guard_atk_ca32ba82f544': 'holding or waiting for a table lock'}; next read rc=0"
     },
     {
       "group": "hold",
@@ -946,7 +946,7 @@
       "group": "undo",
       "name": "rerunning_undo_changes_nothing",
       "status": "HOLDS",
-      "detail": "{'login': 'guard_atk_57ecc29012f0', 'undone': 0, 'refused': None, 'remaining': 0}"
+      "detail": "{'login': 'guard_atk_a7dffe52024a', 'undone': 0, 'refused': None, 'remaining': 0}"
     },
     {
       "group": "undo",
@@ -1096,13 +1096,13 @@
       "group": "drift",
       "name": "agent_login_made_superuser_is_found",
       "status": "HOLDS",
-      "detail": "agent login too strong: guard_atk_03c461c40506; superuser logins changed"
+      "detail": "agent login too strong: guard_atk_ca32ba82f544; superuser logins changed"
     },
     {
       "group": "drift",
       "name": "agent_login_given_another_role_is_found",
       "status": "HOLDS",
-      "detail": "agent login guard_atk_03c461c40506 holds pg_read_server_files"
+      "detail": "agent login guard_atk_ca32ba82f544 holds pg_read_server_files"
     },
     {
       "group": "drift",
@@ -1162,19 +1162,19 @@
       "group": "drift",
       "name": "a_role_holding_the_worker_role_through_another_is_found",
       "status": "HOLDS",
-      "detail": "agent login guard_atk_03c461c40506 holds guard_atk_mid_25d781dd"
+      "detail": "agent login guard_atk_ca32ba82f544 holds guard_atk_mid_85594ba2"
     },
     {
       "group": "drift",
       "name": "agent_login_with_no_expiry_is_found",
       "status": "HOLDS",
-      "detail": "agent login not built by the broker: guard_atk_03c461c40506"
+      "detail": "agent login not built by the broker: guard_atk_ca32ba82f544"
     },
     {
       "group": "drift",
       "name": "a_login_holding_the_worker_role_through_another_role_is_found",
       "status": "HOLDS",
-      "detail": "agent login guard_atk_98c66373c28e holds guard_atk_nest_724ce8e7; agent login not built by the broker: guard_atk_98c66373c28e; guard_atk_98c66373c28e holds guard_worker through another role"
+      "detail": "agent login guard_atk_1fbed92b9b70 holds guard_atk_nest_b51caae8; agent login not built by the broker: guard_atk_1fbed92b9b70; guard_atk_1fbed92b9b70 holds guard_worker through another role"
     },
     {
       "group": "drift",
@@ -1198,7 +1198,7 @@
       "group": "freeze",
       "name": "keepers_round_ends_transactions_already_past_the_gate",
       "status": "HOLDS",
-      "detail": "[{'pid': 1409687, 'login': 'guard_atk_9321501f731a', 'reason': 'writing while frozen'}]"
+      "detail": "[{'pid': 1435692, 'login': 'guard_atk_9180b355ad71', 'reason': 'writing while frozen'}]"
     },
     {
       "group": "freeze",
@@ -1414,7 +1414,7 @@
       "group": "reach",
       "name": "login_cannot_connect_to_another_database",
       "status": "HOLDS",
-      "detail": "psql: error: connection to server at \"127.0.0.1\", port 5432 failed: FATAL:  permission denied for database \"agentdb_test_guardother_9f23a8d9"
+      "detail": "psql: error: connection to server at \"127.0.0.1\", port 5432 failed: FATAL:  permission denied for database \"agentdb_test_guardother_c260f162"
     },
     {
       "group": "reach",
@@ -1438,7 +1438,7 @@
       "group": "expiry",
       "name": "keeper_ends_the_expired_logins_sessions",
       "status": "HOLDS",
-      "detail": "{'guard_atk_d6b5f9867e48': 'login expired'}"
+      "detail": "{'guard_atk_8f72066fc0bc': 'login expired'}"
     },
     {
       "group": "retire",
@@ -1570,13 +1570,13 @@
       "group": "cli",
       "name": "run_retires_the_login_when_the_command_ends",
       "status": "HOLDS",
-      "detail": "guard_atk_4d6a32c4bfc8: 0 left"
+      "detail": "guard_atk_57e6191f201d: 0 left"
     },
     {
       "group": "cli",
       "name": "undo_from_the_command_line",
       "status": "HOLDS",
-      "detail": "exit 0; {'login': 'guard_atk_1711ce61d81e', 'undone': 1, 'refused': None, 'remaining': 0}"
+      "detail": "exit 0; {'login': 'guard_atk_c5d0cfc85e8e', 'undone': 1, 'refused': None, 'remaining': 0}"
     },
     {
       "group": "cli",
@@ -1606,7 +1606,7 @@
       "group": "cli",
       "name": "a_backup_is_kept_only_after_it_restores",
       "status": "HOLDS",
-      "detail": "exit 0; ['agentdb_test_guardsuite_9f23a8d9-20261109-221103.dump']; {'shop.products': 4000, 'shop.orders': 20001, 'shop.suppliers': 50, 'shop.settings': 12, 'shop.atk_flags': 15, 'shop.atk_setting': 1, 'shop.atk_fresh': 10, 'shop.atk_p1': 0, 'shop.atk_c1': 0, 'shop.atk_p2': 0, 'shop.atk_c2': 0, 'shop.atk_p3': 0, 'shop.atk_c3': 0, 'shop.atk_p4': 0, 'shop.atk_c4': 0, 'guard.audit': 20091}"
+      "detail": "exit 0; ['agentdb_test_guardsuite_c260f162-20261109-224851.dump']; {'shop.products': 4000, 'shop.orders': 20001, 'shop.suppliers': 50, 'shop.settings': 12, 'shop.atk_flags': 15, 'shop.atk_setting': 1, 'shop.atk_fresh': 10, 'shop.atk_p1': 0, 'shop.atk_c1': 0, 'shop.atk_p2': 0, 'shop.atk_c2': 0, 'shop.atk_p3': 0, 'shop.atk_c3': 0, 'shop.atk_p4': 0, 'shop.atk_c4': 0, 'guard.audit': 20091}"
     },
     {
       "group": "cli",
@@ -1624,13 +1624,13 @@
       "group": "timing",
       "name": "one_row_update",
       "status": "NOTE",
-      "detail": "median ms over 30: application 7.13, agent 12.43, on this machine"
+      "detail": "median ms over 30: application 4.31, agent 9.09, on this machine"
     },
     {
       "group": "timing",
       "name": "one_self_check",
       "status": "NOTE",
-      "detail": "median 27.4 ms over 10, on this machine"
+      "detail": "median 19.1 ms over 10, on this machine"
     },
     {
       "group": "sandbox",

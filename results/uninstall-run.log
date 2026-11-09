@@ -1,0 +1,19 @@
+[HOLDS] installed_and_clean: problems []
+[HOLDS] dropping_the_roles_is_refused_while_another_database_has_the_guard: The guard is still installed in agentdb_test_unin_b_99035029; its roles are shared there, so nothing was changed
+[HOLDS] uninstall_puts_back_every_right_schema_and_trigger: identical
+[HOLDS] the_audit_log_is_saved_first: 1 rows in agentdb_test_unin_a_99035029-guard-audit-20261109-223950.json
+[HOLDS] the_agents_change_stays: price 11.00
+[HOLDS] the_agent_login_can_no_longer_write: ERROR:  42501: permission denied for schema shop
+[HOLDS] the_application_still_writes: written
+[HOLDS] the_roles_stay_for_the_other_database: guard_broker guard_keeper guard_worker
+[HOLDS] install_and_uninstall_again_put_back_the_same: identical
+[HOLDS] uninstall_from_the_command_line_with_drop_roles: exit 0; dropped ['guard_atk_95ae291f46b3', 'guard_atk_a75a3ba4678a', 'guard_atk_b90808e67041', 'guard_broker', 'guard_keeper', 'guard_worker']; 
+[HOLDS] a_database_locked_before_stays_locked: identical
+[HOLDS] public_got_nothing_it_did_not_have: false false
+[HOLDS] no_guard_role_or_agent_login_is_left: none
+[HOLDS] uninstall_where_there_is_no_guard_is_refused: The guard is not installed in agentdb_test_unin_b_99035029
+{
+ "holds": 14,
+ "gaps": [],
+ "left_behind": "0 databases, 0 logins, '' guard roles"
+}

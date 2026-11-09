@@ -1,5 +1,7 @@
 # agent-guard
 
+[中文](README.zh-CN.md)
+
 Limits what an AI agent's own PostgreSQL login can do to an existing application's tables, even
 when the agent writes raw SQL, without changing the application. "agent-guard" is a working name.
 
@@ -53,6 +55,7 @@ python guard.py undo --database APP_DB LOGIN
 python guard.py freeze --database APP_DB "reason"
 python guard.py unfreeze --database APP_DB
 python guard.py backup --database APP_DB --to FOLDER
+python guard.py uninstall --database APP_DB --audit-to FOLDER [--drop-roles]
 ```
 
 Connection settings come from `connection.local.json` (copy `connection.example.json`). Every command
@@ -65,6 +68,24 @@ Before installing on a real application:
 - Protected tables need a primary key. Prefer bigint keys, since agents can use up sequence values.
 - An agent with a shell must run in a container or under a separate OS account: run
   `python check_sandbox.py` inside it.
+
+## Uninstall
+
+`guard.py uninstall`, run as the superuser owner, takes the guard out of one database:
+
+1. It freezes agents and ends their sessions.
+2. It saves the audit log, undo records and budgets to a JSON file in `--audit-to`. That file is the
+   only record of what agents did.
+3. In one transaction, it drops the guard's triggers, revokes every grant made to the three guard
+   roles, gives PUBLIC back exactly the access it had before the first install (recorded then in
+   `guard.installed_over`), and drops the `guard` schema.
+
+Rows the agents changed stay as they are, so run `undo` first for anything that should go back.
+
+Without `--drop-roles`, the three roles and the agent logins stay on the server. The logins can no
+longer write, but they can still connect wherever PUBLIC may. With `--drop-roles`, those roles and
+logins are dropped too. That is refused, with nothing changed, while another database on the same
+server still has the guard.
 
 ## Evidence
 
@@ -81,6 +102,24 @@ read-set merges and the checks on files, commits and history. The mapping and th
 in the local forkpoint-experiments repository (`experiments/guard_full_suite`,
 `experiments/boundary_without_branches`).
 
+`python tests/check_uninstall.py` installs the guard in two temporary databases, lets an agent login
+change a row in each, and uninstalls it. One database has PostgreSQL's default access; the owner of
+the other had already taken CONNECT, TEMPORARY and large objects from PUBLIC. Uninstalling must put
+every right, schema and trigger back exactly, compared by what the rights mean. The first database
+is then installed and uninstalled a second time, and the last uninstall runs from the command line
+with `--drop-roles`. Result on 2026-11-09 (`results/uninstall-results.json`): 14 held, 0 gaps.
+
+## Tested on
+
+Only this setup, on 2026-11-09:
+
+- One Windows 11 laptop (build 26200).
+- PostgreSQL 16.15, the Ubuntu 24.04.2 package, running in WSL 2 (2.6.3, kernel 6.6.87.2).
+- Python 3.10.11 on Windows, driving psql 16.15 inside WSL through `wsl.exe`.
+- The owner connects over the Unix socket; agent logins connect to 127.0.0.1 with SCRAM passwords.
+
+It needs PostgreSQL 16 or later, because it uses 16's role options. Only 16.15 has been tried.
+
 ## What it does not do
 
 - **Reads are not protected.**
@@ -93,7 +132,8 @@ in the local forkpoint-experiments repository (`experiments/guard_full_suite`,
 - **Undo has gaps.** It does not handle GENERATED ALWAYS identity or generated columns, or a table
   whose columns changed since; an error during undo undoes nothing.
 - **Trusted parts.** The broker, the keeper and the owner's credentials must be out of agents' reach.
-- **Not yet tested:** partitioned tables, a real container, a second machine, an outside review.
+- **Not yet tested:** psql on native Linux or macOS, PostgreSQL 17 or later, a remote server over
+  TLS, partitioned tables, a real container, a second machine, and an outside review.
 
 ## Origin
 
