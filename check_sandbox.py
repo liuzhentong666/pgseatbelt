@@ -17,6 +17,8 @@ import subprocess
 import sys
 
 results = []
+# Run as the agent's own login: tests/check_guard.py runs it too, where this machine has no psql of its own.
+PROBE = "SELECT session_user||' superuser='||current_setting('is_superuser')||' '||guard.status()"
 
 
 def record(name, closed, detail):
@@ -78,9 +80,7 @@ def main():
         record("cannot_log_in_as_postgres_without_a_password", True, "no psql client here")
 
     if os.environ.get("PGUSER") and psql:
-        probe = subprocess.run([psql, "-X", "-qAt", "-w", "-c",
-                                "SELECT session_user||' superuser='||current_setting('is_superuser')||' '||vc.agent_status()"],
-                               capture_output=True, text=True, timeout=20)
+        probe = subprocess.run([psql, "-X", "-qAt", "-w", "-c", PROBE], capture_output=True, text=True, timeout=20)
         record("own_login_works_and_is_not_a_superuser", probe.returncode == 0 and "superuser=off" in probe.stdout,
                (probe.stdout.strip() or probe.stderr.strip())[:300])
 

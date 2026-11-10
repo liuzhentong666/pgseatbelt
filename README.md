@@ -11,7 +11,7 @@ be rolled back to the state before the trouble began.
 Inside the database it goes by a short name, `guard`: the `guard` schema, `guard.sql`, `guard.py`,
 and the roles `guard_worker`, `guard_keeper` and `guard_broker`.
 
-**Status:** a prototype (2026-11-10). Tested on one laptop with the attack suite below, reviewed
+**Status:** a prototype (2026-11-11). Tested on one laptop with the attack suite below, reviewed
 only by the assistant that wrote it, and not yet used on real data.
 
 ## Why
@@ -31,7 +31,9 @@ changes undoable.
   first 20 rows, a login may change at most 10% of a table by default, and within those 20 at most
   half of the rows that were there (AB007). Writes are refused while frozen (AB000) or outside READ
   COMMITTED (AB006), TRUNCATE is refused, and every change goes into `guard.audit` under the login.
-- **A check at commit.** A write made before a freeze cannot commit after it.
+- **A check at commit.** A write made before a freeze cannot commit after it. The check holds a lock
+  that a freeze waits for, and a freeze ends any agent transaction that ran the check early
+  (`SET CONSTRAINTS ... IMMEDIATE`), with or without a keeper running.
 - **Strikes, then a stop.** Each refused attempt to go past a limit (AB002, AB003, AB007) is a strike
   against the login, and the refusal tells the agent how many it has left. Catching the error or
   rolling back does not take a strike back. At the last one (3 by default) the login is stopped
@@ -79,6 +81,9 @@ Before installing on a real application:
 - Installing revokes CONNECT and TEMPORARY on that database from PUBLIC, and the creation of large
   objects, so any login that relies on them needs its own grant first.
 - Protected tables need a primary key. Prefer bigint keys, since agents can use up sequence values.
+- Protecting a table waits at most 2 s for its lock, so a busy table fails with nothing changed
+  instead of holding up the application; run it again. Rerunning install brings the tables already
+  protected up to the current triggers.
 - An agent with a shell must run in a container or under a separate OS account: run
   `python check_sandbox.py` inside it.
 
@@ -113,34 +118,40 @@ first, works after the login is retired, and stops at a row that someone else ha
 `guard.py uninstall`, run as the superuser owner, takes the guard out of one database:
 
 1. It freezes agents and ends their sessions.
-2. It saves the audit log, undo records and budgets to a JSON file in `--audit-to`. That file is the
-   only record of what agents did.
+2. It streams the audit log, undo records and budgets to a JSON file in `--audit-to`, row by row, so
+   a large log fits. That file is the only record of what agents did.
 3. In one transaction, it drops the guard's triggers, revokes every grant made to the three guard
-   roles, gives PUBLIC back exactly the access it had before the first install (recorded then in
-   `guard.installed_over`), and drops the `guard` schema.
+   roles in that database (on tables and their columns, sequences, functions and procedures,
+   schemas, types and large objects, and in default privileges), gives PUBLIC back exactly the access
+   it had before the first install (recorded then in `guard.installed_over`), and drops the `guard`
+   schema. It waits at most 2 s for each protected table's lock. If anything fails, nothing changes
+   and the guard stays installed, frozen.
 
 Rows the agents changed stay as they are, so run `undo` first for anything that should go back.
+Uninstalling is refused, with nothing changed, while something outside the guard depends on it (a
+view over `guard.audit`, say), because dropping the schema would drop that too.
 
 Without `--drop-roles`, the three roles and the agent logins stay on the server. The logins can no
 longer write, but they can still connect wherever PUBLIC may. With `--drop-roles`, those roles and
-logins are dropped too. That is refused, with nothing changed, while another database on the same
-server still has the guard.
+logins are dropped too, in the same transaction. That is refused, with nothing changed, while
+another database on the same server still uses the roles: it still has the guard, or something
+there was granted to them.
 
 ## Evidence
 
 `python tests/check_guard.py` builds a temporary database with an application's schema and rows,
 installs the guard, and attacks it with real logins over real connections. The attacks are
 Forkpoint's boundary suite (`scripts/agent_login_attacks.py` at 1273af5), ported group by group,
-plus a review group: COPY, upsert, MERGE, writable CTEs, and a privileged function called in a loop.
-A plain login with the same grants that does not hold `guard_worker` must get through the same data
-attacks, which shows the attacks work.
+plus a review group: COPY, upsert, MERGE, writable CTEs, a privileged function called in a loop,
+and updates that an application trigger skips. A plain login with the same grants that does not
+hold `guard_worker` must get through the same data attacks, which shows the attacks work.
 
 A strikes group checks the stop and the ways back: a login is stopped at its last strike, the
 transaction of that strike keeps nothing, a strike survives a caught error, an agent cannot touch
 its own count, the keeper ends a stopped login's sessions, and `undo` goes back to the first strike
 or to a chosen transaction. The same is checked through `guard.py run`, `report` and `undo`.
 
-Result on 2026-11-10 (`results/attack-results.json`): 301 held, 15 NOTEs, 0 gaps, with every test
+Result on 2026-11-11 (`results/attack-results.json`): 308 held, 15 NOTEs, 0 gaps, with every test
 database, role and login dropped afterwards. The groups not ported need Forkpoint's branches: the
 read-set merges and the checks on files, commits and history. The mapping and the earlier runs are
 in the local forkpoint-experiments repository (`experiments/guard_full_suite`,
@@ -148,14 +159,17 @@ in the local forkpoint-experiments repository (`experiments/guard_full_suite`,
 
 `python tests/check_uninstall.py` installs the guard in two temporary databases, lets an agent login
 change a row in each, and uninstalls it. One database has PostgreSQL's default access; the owner of
-the other had already taken CONNECT, TEMPORARY and large objects from PUBLIC. Uninstalling must put
-every right, schema and trigger back exactly, compared by what the rights mean. The first database
-is then installed and uninstalled a second time, and the last uninstall runs from the command line
-with `--drop-roles`. Result on 2026-11-10 (`results/uninstall-results.json`): 14 held, 0 gaps.
+the other had already taken CONNECT, TEMPORARY and large objects from PUBLIC. The worker role also
+gets a grant on only some columns of a table, a procedure, and default privileges. Uninstalling must
+put every right, schema and trigger back exactly, compared by what the rights mean, and must refuse
+while a view depends on the guard. The first database is then installed and uninstalled a second
+time, after a protected table was dropped, and the last uninstall runs from the command line with
+`--drop-roles`, which has to be refused first while the other database still grants the roles
+something. Result on 2026-11-11 (`results/uninstall-results.json`): 17 held, 0 gaps.
 
 ## Tested on
 
-Only this setup, on 2026-11-10:
+Only this setup, on 2026-11-09, 2026-11-10 and 2026-11-11:
 
 - One Windows 11 laptop (build 26200).
 - PostgreSQL 16.15, the Ubuntu 24.04.2 package, running in WSL 2 (2.6.3, kernel 6.6.87.2).
@@ -180,9 +194,9 @@ It needs PostgreSQL 16 or later, because it uses 16's role options. Only 16.15 h
 - **No staging.** An agent's write is live when it commits. Stale reads are the agent's own job
   (`SELECT ... FOR UPDATE`).
 - **Undo has gaps.** It does not handle GENERATED ALWAYS identity or generated columns, or a table
-  whose columns changed since; an error during undo undoes nothing. No command redoes what an undo
-  put back, which is why `--undo-on-stop` is a choice and not the default. It goes back to the
-  login's first strike, and no further.
+  whose columns changed since (one dropped since stops it with AB005); an error during undo undoes
+  nothing. No command redoes what an undo put back, which is why `--undo-on-stop` is a choice and
+  not the default. It goes back to the login's first strike, and no further.
 - **Trusted parts.** The broker, the keeper and the owner's credentials must be out of agents' reach.
 - **Not yet tested:** psql on native Linux or macOS, PostgreSQL 17 or later, a remote server over
   TLS, partitioned tables, a real container, a second machine, and an outside review.

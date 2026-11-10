@@ -10,8 +10,10 @@
 --   directly. Triggers on each protected table charge the login's budget (rows and bytes, no
 --   top-ups), apply 011's table share (AB007), refuse while frozen (AB000) or outside READ COMMITTED
 --   (AB006), and append every change to guard.audit with the login from session_user.
--- * A deferred trigger checks the gate again at commit, so a write made before a freeze cannot
---   commit after it; the keeper ends a transaction that fires that check early (SET CONSTRAINTS).
+-- * A deferred trigger checks the gate again at commit, under a share lock on the gate's row that it
+--   keeps until the transaction ends, so a write made before a freeze cannot commit after it. A
+--   transaction that fires that check early (SET CONSTRAINTS ... IMMEDIATE) keeps the lock, and
+--   guard.freeze() ends it.
 -- * guard_keeper tightens and undoes, guard_broker issues logins, and nothing either holds loosens a
 --   limit. guard.boundary_problems() checks all of it from the catalog; the keeper's round freezes on
 --   a problem and ends stuck sessions, including any agent holding or waiting for a table lock
@@ -63,8 +65,6 @@ BEGIN
   EXECUTE format('GRANT CONNECT ON DATABASE %I TO guard_broker WITH GRANT OPTION', current_database());
 END $roles$;
 
-CREATE SCHEMA IF NOT EXISTS guard;
-REVOKE ALL ON SCHEMA guard FROM PUBLIC;
 CREATE TABLE IF NOT EXISTS guard.gate(one boolean PRIMARY KEY DEFAULT true CHECK (one),
   frozen_reason text, frozen_by name, frozen_at timestamptz, fingerprint text, superuser_logins name[]);
 INSERT INTO guard.gate DEFAULT VALUES ON CONFLICT DO NOTHING;
@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS guard.spend(login name NOT NULL, target regclass NOT 
   changed bigint NOT NULL DEFAULT 0, existing bigint NOT NULL DEFAULT 0, PRIMARY KEY (login, target));
 CREATE TABLE IF NOT EXISTS guard.guarded(target regclass PRIMARY KEY, pk_columns text[] NOT NULL);
 -- The columns an agent's UPDATE itself changed, noted before the application's own BEFORE triggers.
+-- guard.charge takes each row's out; guard.intent_done clears what a later BEFORE trigger skipped.
 CREATE TABLE IF NOT EXISTS guard.intent(tx bigint NOT NULL, target regclass NOT NULL, pk jsonb NOT NULL,
   columns text[] NOT NULL, PRIMARY KEY (tx, target, pk));
 CREATE TABLE IF NOT EXISTS guard.commit_check(tx bigint PRIMARY KEY);
@@ -230,9 +231,11 @@ BEGIN
   RETURN NULL;
 END $$;
 
+-- intent, charge and undo fix every setting an agent could use to change the text to_jsonb writes
+-- for a value, so that what is recorded and what undo compares it with are spelled alike.
 CREATE OR REPLACE FUNCTION guard.intent() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = pg_catalog, guard, pg_temp
-SET TimeZone = 'UTC' SET IntervalStyle = 'postgres' SET extra_float_digits = 1 SET bytea_output = 'hex' AS $$
+SET search_path = pg_catalog, guard, pg_temp SET TimeZone = 'UTC' SET IntervalStyle = 'postgres'
+SET extra_float_digits = 1 SET bytea_output = 'hex' SET lc_monetary = 'C' AS $$
 DECLARE o jsonb; n jsonb; key jsonb;
 BEGIN
   IF NOT guard.is_agent() THEN RETURN NEW; END IF;
@@ -244,9 +247,21 @@ BEGIN
   RETURN NEW;
 END $$;
 
+-- After each UPDATE statement: a row a later BEFORE trigger skipped (suppress_redundant_updates_trigger,
+-- say) never reaches guard.charge, so its intent would stay behind, uncharged. AFTER STATEMENT
+-- triggers fire after the statement's row triggers, so guard.charge has taken the rest by now.
+CREATE OR REPLACE FUNCTION guard.intent_done() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, guard, pg_temp AS $$
+BEGIN
+  IF guard.is_agent() THEN
+    DELETE FROM guard.intent i WHERE i.tx = txid_current_if_assigned() AND i.target = TG_RELID;
+  END IF;
+  RETURN NULL;
+END $$;
+
 CREATE OR REPLACE FUNCTION guard.charge() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = pg_catalog, guard, pg_temp
-SET TimeZone = 'UTC' SET IntervalStyle = 'postgres' SET extra_float_digits = 1 SET bytea_output = 'hex' AS $$
+SET search_path = pg_catalog, guard, pg_temp SET TimeZone = 'UTC' SET IntervalStyle = 'postgres'
+SET extra_float_digits = 1 SET bytea_output = 'hex' SET lc_monetary = 'C' AS $$
 DECLARE b guard.budget; s guard.spend; o jsonb; n jsonb; key jsonb; cols text[]; row_bytes bigint; table_size bigint; too_much boolean;
 BEGIN
   IF NOT guard.is_agent() THEN RETURN NULL; END IF;
@@ -303,12 +318,13 @@ BEGIN
 END $$;
 
 -- At commit (deferred): a transaction in which an agent wrote does not commit while frozen, or once
--- its login is stopped.
+-- its login is stopped. The share lock on the gate's row stays until this transaction ends, so a
+-- freeze, which updates that row, waits for it: none can come between this check and the commit.
 CREATE OR REPLACE FUNCTION guard.at_commit() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, guard, pg_temp AS $$
 DECLARE reason text;
 BEGIN
-  SELECT g.frozen_reason INTO reason FROM guard.gate g;
+  SELECT g.frozen_reason INTO reason FROM guard.gate g FOR SHARE;
   IF NOT FOUND OR reason IS NOT NULL THEN
     PERFORM guard.refuse('AB000', 'Writes are frozen', jsonb_build_object('reason', coalesce(reason, 'guard.gate is empty')),
       'Nothing in this transaction was kept. Reads still work. Stop writing and report this reason in your task status.');
@@ -321,20 +337,23 @@ DROP TRIGGER IF EXISTS at_commit ON guard.commit_check;
 CREATE CONSTRAINT TRIGGER at_commit AFTER INSERT ON guard.commit_check DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION guard.at_commit();
 
--- The owner protects a table: triggers, and guard_worker's grants on it and its sequences.
+-- The owner protects a table: triggers, and guard_worker's grants on it and its sequences. A trigger
+-- needs a lock that stops the application's writes, and a wait for one queues them too, so a busy
+-- table fails fast instead (rerun it).
 CREATE OR REPLACE FUNCTION guard.protect(p_table regclass) RETURNS void LANGUAGE plpgsql
-SET search_path = pg_catalog, guard, pg_temp AS $$
+SET search_path = pg_catalog, guard, pg_temp SET lock_timeout = '2s' AS $$
 DECLARE keys text[]; args text; seq record;
 BEGIN
   SELECT array_agg(a.attname::text ORDER BY k.ord) INTO keys
   FROM pg_index i CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
   JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
   WHERE i.indrelid = p_table AND i.indisprimary;
-  IF keys IS NULL THEN RAISE EXCEPTION 'A primary key is required'; END IF;
+  IF keys IS NULL THEN RAISE EXCEPTION 'A primary key is required: %', p_table; END IF;
   INSERT INTO guard.guarded VALUES (p_table, keys) ON CONFLICT (target) DO NOTHING;
   args := (SELECT string_agg(quote_literal(k), ',') FROM unnest(keys) k);
   -- Triggers of one kind fire in name order; '!' sorts before letters and digits.
   EXECUTE format('CREATE OR REPLACE TRIGGER %I BEFORE UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION guard.intent(%s)', '!guard_intent', p_table, args);
+  EXECUTE format('CREATE OR REPLACE TRIGGER guard_intent_done AFTER UPDATE ON %s FOR EACH STATEMENT EXECUTE FUNCTION guard.intent_done()', p_table);
   EXECUTE format('CREATE OR REPLACE TRIGGER guard_statement BEFORE INSERT OR UPDATE OR DELETE ON %s FOR EACH STATEMENT EXECUTE FUNCTION guard.before_statement()', p_table);
   EXECUTE format('CREATE OR REPLACE TRIGGER guard_truncate BEFORE TRUNCATE ON %s FOR EACH STATEMENT EXECUTE FUNCTION guard.before_statement()', p_table);
   EXECUTE format('CREATE OR REPLACE TRIGGER guard_row AFTER INSERT OR UPDATE OR DELETE ON %s FOR EACH ROW EXECUTE FUNCTION guard.charge(%s)', p_table, args);
@@ -383,17 +402,33 @@ BEGIN
   UPDATE guard.budget SET rows_left = 0, bytes_left = 0 WHERE login = p_login;
 END $$;
 
--- Tighten only. The first reason stays.
-CREATE OR REPLACE FUNCTION guard.freeze(p_reason text) RETURNS void LANGUAGE sql SECURITY DEFINER
-SET search_path = pg_catalog, guard, pg_temp AS $$
-  UPDATE guard.gate SET frozen_reason = coalesce(frozen_reason, nullif(p_reason, ''), 'no reason given'),
-    frozen_by = coalesce(frozen_by, session_user), frozen_at = coalesce(frozen_at, clock_timestamp())
-$$;
+-- Tighten only. The first reason stays. Updating the gate's row waits for every agent transaction
+-- that holds guard.at_commit's share lock on it. Most hold it only while they commit; one that fired
+-- that check early (SET CONSTRAINTS ... IMMEDIATE) holds it until it ends, and could commit after
+-- the freeze, so when the wait runs long, agent transactions that have written end here.
+CREATE OR REPLACE FUNCTION guard.freeze(p_reason text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog, guard, pg_temp SET lock_timeout = '1s' AS $$
+BEGIN
+  FOR attempt IN 1..30 LOOP
+    BEGIN
+      UPDATE guard.gate SET frozen_reason = coalesce(nullif(p_reason, ''), 'no reason given'),
+        frozen_by = session_user, frozen_at = clock_timestamp()
+      WHERE frozen_reason IS NULL;
+      RETURN;
+    EXCEPTION WHEN lock_not_available THEN
+      PERFORM pg_stat_clear_snapshot();
+      PERFORM pg_terminate_backend(a.pid, 1000) FROM pg_stat_activity a
+      WHERE a.datname = current_database() AND a.backend_xid IS NOT NULL AND a.pid <> pg_backend_pid()
+        AND a.usesysid IN (SELECT guard.agent_logins());
+    END;
+  END LOOP;
+  RAISE EXCEPTION 'Writes could not be frozen: the gate stayed locked' USING ERRCODE = '55P03';
+END $$;
 
 -- Granted to no one: only the owner loosens. If the cause remains, the next check freezes again.
 CREATE OR REPLACE FUNCTION guard.unfreeze() RETURNS void LANGUAGE sql SECURITY DEFINER
 SET search_path = pg_catalog, guard, pg_temp AS $$
-  UPDATE guard.gate SET frozen_reason = NULL, frozen_by = NULL, frozen_at = NULL
+  UPDATE guard.gate SET frozen_reason = NULL, frozen_by = NULL, frozen_at = NULL WHERE frozen_reason IS NOT NULL
 $$;
 
 -- Undo a login's changes newest first, checking and putting back only the columns it changed. Stops
@@ -403,12 +438,17 @@ $$;
 -- transaction in guard.timeline, or the login's struck_from, the state before its first strike.
 DROP FUNCTION IF EXISTS guard.undo(name);  -- as it was before p_from
 CREATE OR REPLACE FUNCTION guard.undo(p_login name, p_from bigint DEFAULT NULL) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = pg_catalog, guard, pg_temp
-SET TimeZone = 'UTC' SET IntervalStyle = 'postgres' SET extra_float_digits = 1 SET bytea_output = 'hex' AS $$
+SET search_path = pg_catalog, guard, pg_temp SET TimeZone = 'UTC' SET IntervalStyle = 'postgres'
+SET extra_float_digits = 1 SET bytea_output = 'hex' SET lc_monetary = 'C' AS $$
 DECLARE a guard.audit; keys text[]; doc jsonb; now_doc jsonb; key_where text; set_list text; n integer := 0; refused jsonb;
 BEGIN
   FOR a IN SELECT x.* FROM guard.audit x WHERE x.login = p_login AND x.id >= coalesce(p_from, 0)
              AND NOT EXISTS (SELECT 1 FROM guard.undone u WHERE u.audit_id = x.id) ORDER BY x.id DESC LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = a.target) THEN
+      refused := jsonb_build_object('code', 'AB005', 'message', 'The table this login changed has been dropped since',
+        'table', a.target::text, 'key', a.pk, 'audit_id', a.id);
+      EXIT;
+    END IF;
     SELECT g.pk_columns INTO keys FROM guard.guarded g WHERE g.target = a.target;
     doc := coalesce(a.after, a.before);
     key_where := (SELECT string_agg(format('t.%I = (jsonb_populate_record(NULL::%s, %L::jsonb)).%I', k, a.target, doc, k), ' AND ')
@@ -526,9 +566,14 @@ SET search_path = pg_catalog, guard, pg_temp AS $$
     WHERE NOT t.tgisinternal AND t.tgenabled <> 'O'
       AND (c.relnamespace = 'guard'::regnamespace OR c.oid IN (SELECT g.target FROM guard.guarded g))
     UNION ALL
+    SELECT 'guarded table has been dropped: ' || g.target::text FROM guard.guarded g
+    WHERE NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = g.target)
+    UNION ALL
     SELECT 'guarded table without trigger ' || w.name || ': ' || g.target::text
-    FROM guard.guarded g CROSS JOIN (VALUES ('!guard_intent'), ('guard_row'), ('guard_statement'), ('guard_truncate')) w(name)
-    WHERE NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = g.target AND t.tgname = w.name)
+    FROM guard.guarded g CROSS JOIN (VALUES ('!guard_intent'), ('guard_intent_done'), ('guard_row'), ('guard_statement'),
+                                            ('guard_truncate')) w(name)
+    WHERE EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = g.target)
+      AND NOT EXISTS (SELECT 1 FROM pg_trigger t WHERE t.tgrelid = g.target AND t.tgname = w.name)
     UNION ALL
     SELECT 'guard table without trigger ' || w.t || '.' || w.name
     FROM (VALUES ('guard.audit', 'immutable'), ('guard.audit', 'immutable_truncate'), ('guard.undone', 'immutable'),
@@ -557,15 +602,23 @@ SET search_path = pg_catalog, guard, pg_temp AS $$
       OR has_function_privilege('guard_worker', 'pg_catalog.lo_creat(integer)', 'EXECUTE')
       OR has_function_privilege('guard_worker', 'pg_catalog.lo_from_bytea(oid,bytea)', 'EXECUTE')
     UNION ALL
+    -- has_table_privilege sees only grants on a whole table; a grant on some of its columns counts too.
     SELECT b.role::text || ' may change ' || u.name FROM boundary b CROSS JOIN user_table u
-    WHERE u.relkind IN ('r', 'p', 'v', 'm', 'f') AND has_table_privilege(b.role::oid, u.oid, 'INSERT,UPDATE,DELETE')
+    WHERE CASE WHEN u.relkind IN ('r', 'p', 'v', 'm', 'f') THEN has_table_privilege(b.role::oid, u.oid, 'INSERT,UPDATE,DELETE')
+                                                             OR has_any_column_privilege(b.role::oid, u.oid, 'INSERT,UPDATE') END
       AND NOT (b.role = 'guard_worker'::regrole AND u.oid IN (SELECT g.target FROM guard.guarded g))
     UNION ALL
+    -- UPDATE on a sequence allows setval, which can make the application's next inserts collide.
+    SELECT b.role::text || ' may set sequence ' || u.name FROM boundary b CROSS JOIN user_table u
+    WHERE u.relkind = 'S' AND has_table_privilege(b.role::oid, u.oid, 'UPDATE')
+    UNION ALL
     SELECT b.role::text || ' may truncate, reference or add triggers to ' || u.name FROM boundary b CROSS JOIN user_table u
-    WHERE u.relkind IN ('r', 'p') AND has_table_privilege(b.role::oid, u.oid, 'TRUNCATE,REFERENCES,TRIGGER')
+    WHERE CASE WHEN u.relkind IN ('r', 'p') THEN has_table_privilege(b.role::oid, u.oid, 'TRUNCATE,REFERENCES,TRIGGER')
+                                               OR has_any_column_privilege(b.role::oid, u.oid, 'REFERENCES') END
     UNION ALL
     SELECT b.role::text || ' may read guard.' || c.relname FROM boundary b CROSS JOIN pg_class c
-    WHERE c.relnamespace = 'guard'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm') AND has_table_privilege(b.role::oid, c.oid, 'SELECT')
+    WHERE c.relnamespace = 'guard'::regnamespace
+      AND CASE WHEN c.relkind IN ('r', 'p', 'v', 'm') THEN has_any_column_privilege(b.role::oid, c.oid, 'SELECT') END
     UNION ALL
     -- The strikes are kept in sequences: a role that could set one could take a strike back.
     SELECT b.role::text || ' may use the sequence guard.' || c.relname FROM boundary b CROSS JOIN pg_class c
@@ -633,9 +686,7 @@ SET search_path = pg_catalog, guard, pg_temp AS $$
         'strikes', (guard.strikes(r.rolname)).strikes, 'stopped', guard.stopped(r.rolname)) ORDER BY r.rolname), '[]'::jsonb)
       FROM guard.agent_logins() x JOIN pg_roles r ON r.oid = x LEFT JOIN guard.budget b ON b.login = r.rolname
       WHERE r.rolcanlogin OR guard.stopped(r.rolname)),
-    'open_databases', (SELECT coalesce(jsonb_agg(o.datname ORDER BY o.datname), '[]'::jsonb) FROM open_database o
-      WHERE o.datname NOT LIKE 'agentdb\_test\_%'),
-    'open_test_databases', (SELECT count(*) FROM open_database o WHERE o.datname LIKE 'agentdb\_test\_%'))
+    'open_databases', (SELECT coalesce(jsonb_agg(o.datname ORDER BY o.datname), '[]'::jsonb) FROM open_database o))
   FROM guard.gate g
 $$;
 
@@ -685,6 +736,11 @@ GRANT EXECUTE ON FUNCTION guard.report(name), guard.timeline(name), guard.freeze
   guard.undo(name, bigint), guard.boundary_check(), guard.boundary_status(), guard.end_stuck_sessions(integer, integer, boolean),
   guard.agent_logins() TO guard_keeper;
 GRANT EXECUTE ON FUNCTION guard.issue_budget(name, bigint, bigint, numeric, integer), guard.stop_agent(name) TO guard_broker;
+
+-- A rerun brings the tables already protected up to this file's triggers, and clears intents an
+-- earlier version left behind (any of a transaction that is over).
+SELECT guard.protect(c.oid) FROM guard.guarded g JOIN pg_class c ON c.oid = g.target;
+DELETE FROM guard.intent i WHERE txid_status(i.tx) IS DISTINCT FROM 'in progress';
 
 UPDATE guard.gate SET fingerprint = guard.fingerprint(),
   superuser_logins = ARRAY(SELECT rolname FROM pg_roles WHERE rolsuper AND rolcanlogin ORDER BY rolname);
