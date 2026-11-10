@@ -116,8 +116,10 @@ def main():
         record("uninstall_puts_back_every_right_schema_and_trigger", gone == [], gone or "identical")
         saved = json.loads(Path(result["audit_file"]).read_text(encoding="utf-8"))
         audit = saved["audit"]
+        budgets = {budget["login"]: (budget["strikes"], budget["stopped"]) for budget in saved["budgets"]}
         record("the_audit_log_is_saved_first", len(audit) == 1 and audit[0]["login"] == login_a and audit[0]["op"] == "U"
-               and audit[0]["target"] == "shop.products", f"{result['audit_rows']} rows in {Path(result['audit_file']).name}")
+               and audit[0]["target"] == "shop.products" and budgets == {login_a: (0, False)},
+               f"{result['audit_rows']} rows in {Path(result['audit_file']).name}; strikes and stopped by login: {budgets}")
         price = connect(a).sql("SELECT price FROM shop.products WHERE id = 2001;")
         record("the_agents_change_stays", float(price) == 11, f"price {price}")
         # PUBLIC may connect here again, as before install, so the login may connect; it must not write.

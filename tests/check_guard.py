@@ -10,6 +10,7 @@ that gets through is a GAP and the exit code is 1; a NOTE records something allo
 Drops the databases and every role it made, unless --keep.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -87,10 +88,16 @@ class Attacks:
         return Connection(argparse.Namespace(config=None, database=database or self.database, role=role, password=False,
                                              user=user, host="127.0.0.1", password_value=password))
 
-    def issue(self, rows=50, size=5_000_000, hours=1, share=0.1):
-        name, password, _ = issue_login(self.broker, self.database, rows, size, hours, prefix="guard_atk", max_table_share=share)
+    def issue(self, rows=50, size=5_000_000, hours=1, share=0.1, strikes=3):
+        name, password, _ = issue_login(self.broker, self.database, rows, size, hours, prefix="guard_atk", max_table_share=share,
+                                        strikes=strikes)
         self.issued.append(name)
         return self.login(name, password), name
+
+    @staticmethod
+    def strikes_sequence(name):
+        """Where the guard keeps a login's count of strikes."""
+        return "guard.strikes_" + hashlib.md5(name.encode("utf-8")).hexdigest()
 
     def hand_built(self, statements):
         """A login built by the owner, for what the broker would never issue."""
@@ -277,7 +284,16 @@ class Attacks:
                 ("read_the_self_check", "SELECT guard.boundary_problems();"), ("read_the_status", "SELECT guard.boundary_status();"),
                 ("end_sessions", "SELECT guard.end_stuck_sessions(1,1,true);"), ("list_the_agents", "SELECT guard.agent_logins();"),
                 ("inner_refuse", "SELECT guard.refuse('AB000','x','{}','x');"), ("inner_gate", "SELECT guard.gate_open();"),
-                ("inner_is_agent", "SELECT guard.is_agent();"), ("inner_fingerprint", "SELECT guard.fingerprint();")):
+                ("inner_is_agent", "SELECT guard.is_agent();"), ("inner_fingerprint", "SELECT guard.fingerprint();"),
+                ("take_its_own_strike_back", f"SELECT setval('{self.strikes_sequence(self.a_name)}', 1, false);"),
+                ("restart_its_own_strikes", f"ALTER SEQUENCE {self.strikes_sequence(self.a_name)} RESTART;"),
+                ("drop_its_own_strikes", f"DROP SEQUENCE {self.strikes_sequence(self.a_name)};"),
+                ("read_another_agents_strikes", f"SELECT last_value FROM {self.strikes_sequence(self.b_name)};"),
+                ("strike_another_agent", f"SELECT nextval('{self.strikes_sequence(self.b_name)}');"),
+                ("strike_another_agent_the_guards_way", f"SELECT guard.strike('{self.b_name}');"),
+                ("read_strikes_the_guards_way", f"SELECT * FROM guard.strikes('{self.b_name}');"),
+                ("ask_whether_another_agent_is_stopped", f"SELECT guard.stopped('{self.b_name}');"),
+                ("inner_not_stopped", "SELECT guard.not_stopped();"), ("timeline", f"SELECT guard.timeline('{self.b_name}');")):
             self.refused("guard", label, a, statement)
         for label, statement, states in (
                 ("snapshot_isolation_is_refused", f"BEGIN ISOLATION LEVEL REPEATABLE READ; {self.update([row])} COMMIT;", ("AB006",)),
@@ -589,6 +605,108 @@ class Attacks:
         self.record("undo", "undo_finishes_once_the_newer_work_is_undone",
                     result["refused"] is None and result["undone"] == 1 and self.price(row) == original, f"{result['undone']} undone; price {self.price(row)}")
 
+        # Back to a point: three transactions, and only the second and the third are undone.
+        p, p_name = self.issue()
+        first, second, gone = self.rows(3)
+        clean = self.state()
+        self.ok(p, self.update([first], set_to="1"))
+        kept = self.state()
+        self.ok(p, f"BEGIN; {self.update([second], set_to='2')} DELETE FROM shop.products WHERE id={gone}; COMMIT;")
+        self.ok(p, "INSERT INTO shop.products(id,sku,name,price,stock) VALUES(900003,'sku-point','point',1,1);")
+        timeline = json.loads(self.keeper.sql(f"SELECT guard.timeline('{p_name}');", self.database))
+        self.record("undo", "the_timeline_lists_a_logins_transactions", [t["changes"] for t in timeline] == [1, 2, 1]
+                    and timeline[1]["tables"] == {"shop.products": {"inserted": 0, "updated": 1, "deleted": 1}},
+                    json.dumps(timeline)[:400])
+        result = undo_login(self.keeper, p_name, self.database, start=timeline[1]["from"])
+        self.record("undo", "undo_from_a_point_undoes_that_transaction_and_the_later_ones",
+                    result["undone"] == 3 and result["kept"] == 1 and result["remaining"] == 0 and not result["refused"],
+                    f"{result['undone']} undone, {result['kept']} kept, refused {result['refused']}")
+        self.record("undo", "undo_from_a_point_keeps_what_the_login_did_before_it", self.state() == kept != clean,
+                    "the tables are as the first transaction left them")
+        result = undo_login(self.keeper, p_name, self.database)
+        self.record("undo", "a_full_undo_afterwards_takes_the_rest_back", result["undone"] == 1 and self.state() == clean,
+                    f"{result['undone']} undone; all four tables as before the login")
+
+    def strikes(self):
+        """Going past a limit is a strike. At the last one the login is stopped, and undo can go back to the first."""
+        wipe = "DELETE FROM shop.orders;"
+        caught = "DO $$ BEGIN DELETE FROM shop.orders; EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'caught'; END $$;"
+        own = lambda connection: json.loads(self.ok(connection, "SELECT guard.status();"))  # what the agent itself is shown
+        s, s_name = self.issue(**WIDE)
+        before_strike, after_strike, last = self.rows(3)
+        clean = self.state()
+        self.ok(s, self.update([before_strike]))
+        kept = self.state()
+        hint = s.execute(wipe, self.database).stderr
+        self.record("strikes", "a_refusal_tells_the_agent_how_many_strikes_it_has", sqlstate(hint) == "AB007" and "strike 1 of 3" in hint,
+                    next((line for line in hint.splitlines() if line.startswith("HINT:")), hint.strip())[-140:])
+        status = own(s)
+        self.record("strikes", "an_agent_sees_its_own_strikes", (status.get("strikes"), status.get("max_strikes"), status.get("stopped")) == (1, 3, False)
+                    and "struck_from" not in status, json.dumps(status)[:300])
+        self.ok(s, self.update([after_strike]))
+        self.record("strikes", "a_login_with_strikes_left_still_writes", self.state() != kept, "a change within its limits landed after the first strike")
+        result = s.execute(caught, self.database)
+        self.record("strikes", "catching_a_refusal_does_not_take_the_strike_back", result.returncode == 0 and own(s)["strikes"] == 2,
+                    f"the DO block committed; strikes {own(s)['strikes']}")
+        # The third strike, caught inside a transaction that had already written a row.
+        state = self.refused("strikes", "the_transaction_of_the_last_strike_cannot_commit", s, f"BEGIN; {self.update([last])} {caught} COMMIT;", ("AB001",))
+        self.record("strikes", "nothing_of_that_transaction_was_kept", state == "AB001" and self.price(last) == 10, f"price {self.price(last)}")
+        self.refused("strikes", "a_stopped_login_cannot_write", s, self.update(self.rows(1)), ("AB001",))
+        self.refused("strikes", "a_stopped_login_cannot_insert", s, "INSERT INTO shop.settings VALUES ('x-stopped','x');", ("AB001",))
+        status = own(s)
+        self.record("strikes", "the_agent_is_told_it_is_stopped", status.get("stopped") is True and status.get("strikes") == 3, json.dumps(status)[:300])
+
+        session = self.hold(s, "SELECT 'open';")
+        session.stdout.readline()
+        ended = self.end_stuck(3600, 3600)
+        alive = self.ask(session, "SELECT 'alive';")
+        self.close(session)
+        self.record("strikes", "keeper_ends_every_session_of_a_stopped_login", ended.get(s_name) == "login stopped" and alive != "alive", f"ended {ended}")
+        round_ = keeper_round(self.keeper, self.database)
+        self.record("strikes", "keepers_round_names_the_stopped_login", s_name in round_["stopped"] and not round_["frozen"],
+                    f"stopped {round_['stopped']}; frozen {round_['frozen']}")
+        report = json.loads(self.keeper.sql(f"SELECT guard.report('{s_name}');", self.database))
+        self.record("strikes", "the_report_says_the_login_was_stopped_and_what_it_did_since_its_first_strike",
+                    report["stopped"] is True and report["strikes"] == 3 and report["changes"] == 2 and report["changes_since_first_strike"] == 1,
+                    json.dumps({k: report[k] for k in ("strikes", "max_strikes", "stopped", "struck_from", "changes", "changes_since_first_strike")}))
+        timeline = json.loads(self.keeper.sql(f"SELECT guard.timeline('{s_name}');", self.database))
+        self.record("strikes", "the_timeline_marks_what_came_after_the_first_strike", [t["after_first_strike"] for t in timeline] == [False, True],
+                    json.dumps(timeline)[:300])
+        result = undo_login(self.keeper, s_name, self.database, since_strike=True)
+        self.record("strikes", "undo_since_the_first_strike_keeps_the_work_before_it",
+                    result["undone"] == 1 and result["kept"] == 1 and not result["refused"] and self.state() == kept,
+                    f"{result['undone']} undone, {result['kept']} kept; the tables are as they were before the first strike")
+        result = undo_login(self.keeper, s_name, self.database)
+        self.record("strikes", "a_full_undo_takes_the_rest_back", result["undone"] == 1 and self.state() == clean, f"{result['undone']} undone")
+        other = self.b.execute(self.update(self.rows(1)), self.database)
+        self.record("strikes", "another_login_is_not_stopped_with_it", other.returncode == 0, (other.stderr.strip() or "landed")[:160])
+
+        strict, _ = self.issue(strikes=1, **WIDE)  # one strike: the first refusal stops it
+        landed = [self.code(strict, wipe), self.code(strict, self.update(self.rows(1)))]
+        self.record("strikes", "with_one_strike_the_first_refusal_stops_the_login", landed == ["AB007", "AB001"], str(landed))
+        frozen, _ = self.issue()  # a refusal that is not the agent's doing is no strike
+        self.keeper.sql("SELECT guard.freeze('test');", self.database)
+        landed = [self.code(frozen, self.update(self.rows(1))) for _ in range(4)]
+        self.owner.sql("SELECT guard.unfreeze();")
+        isolated = [self.code(frozen, f"BEGIN ISOLATION LEVEL SERIALIZABLE; {self.update(self.rows(1))} COMMIT;") for _ in range(4)]
+        self.record("strikes", "being_frozen_or_refused_for_isolation_is_no_strike",
+                    landed == ["AB000"] * 4 and isolated == ["AB006"] * 4 and own(frozen)["strikes"] == 0 and self.code(frozen, self.update(self.rows(1))) == "landed",
+                    f"{landed} {isolated}; strikes {own(frozen)['strikes']}")
+        no_budget, no_budget_name = self.hand_built(f"GRANT {WORKER} TO {{name}} WITH INHERIT TRUE, SET FALSE; GRANT CONNECT ON DATABASE \"{{database}}\" TO {{name}};")
+        landed = [self.code(no_budget, self.update(self.rows(1))) for _ in range(4)]
+        self.record("strikes", "a_login_with_no_budget_stays_refused_as_that", landed == ["AB002"] * 4, str(landed))
+        self.drop(no_budget_name)
+
+        gone, gone_name = self.issue()  # retired: the count stays, the two sequences go
+        self.code(gone, self.update(self.rows(60)))
+        retire_login(self.broker, self.keeper, self.database, gone_name)
+        self.issued.remove(gone_name)
+        report = json.loads(self.keeper.sql(f"SELECT guard.report('{gone_name}');", self.database))
+        left = self.owner.sql(f"SELECT count(*) FROM pg_class WHERE relnamespace='guard'::regnamespace AND relkind='S' "
+                              f"AND relname LIKE '%{self.strikes_sequence(gone_name)[-32:]}';")
+        self.record("strikes", "a_retired_login_keeps_its_strikes_and_leaves_no_sequence", report["strikes"] == 1 and report["struck_from"] is not None
+                    and report["stopped"] is False and left == "0", f"strikes {report['strikes']}; {left} sequences left")
+
     def small_tables(self):
         """Tables a real schema has beside the main ones: small ones, an empty one, ordinary foreign keys, functions."""
         pairs = "".join(f"CREATE TABLE shop.atk_p{k}(id int PRIMARY KEY); CREATE TABLE shop.atk_c{k}(id int PRIMARY KEY,"
@@ -643,9 +761,12 @@ class Attacks:
              "disabled trigger guard.audit.immutable"),
             ("commit_check_dropped", "DROP TRIGGER at_commit ON guard.commit_check;", at_commit + ";", "guard table without trigger guard.commit_check.at_commit"),
             ("write_grant_added", f"GRANT UPDATE ON shop.app_log TO {WORKER};", f"REVOKE UPDATE ON shop.app_log FROM {WORKER};", f"{WORKER} may change shop.app_log"),
-            ("function_grant_added", f"GRANT EXECUTE ON FUNCTION guard.undo(name) TO {WORKER};", f"REVOKE EXECUTE ON FUNCTION guard.undo(name) FROM {WORKER};",
-             f"{WORKER} may execute guard.undo(name)"),
+            ("function_grant_added", f"GRANT EXECUTE ON FUNCTION guard.undo(name, bigint) TO {WORKER};",
+             f"REVOKE EXECUTE ON FUNCTION guard.undo(name, bigint) FROM {WORKER};", f"{WORKER} may execute guard.undo(name,bigint)"),
             ("guard_read_grant_added", f"GRANT SELECT ON guard.budget TO {WORKER};", f"REVOKE SELECT ON guard.budget FROM {WORKER};", f"{WORKER} may read guard.budget"),
+            ("strikes_left_open_to_agents", f"GRANT UPDATE ON SEQUENCE {self.strikes_sequence(a_name)} TO {WORKER};",
+             f"REVOKE UPDATE ON SEQUENCE {self.strikes_sequence(a_name)} FROM {WORKER};",
+             f"{WORKER} may use the sequence {self.strikes_sequence(a_name)}"),
             ("schema_create_granted", f"GRANT CREATE ON SCHEMA shop TO {WORKER};", f"REVOKE CREATE ON SCHEMA shop FROM {WORKER};", f"{WORKER} may create in schema shop"),
             ("database_open_to_everyone", f'GRANT CONNECT ON DATABASE "{database}" TO PUBLIC;', f'REVOKE CONNECT ON DATABASE "{database}" FROM PUBLIC;',
              "any role may connect to this database"),
@@ -717,7 +838,7 @@ class Attacks:
         begun.stdout.readline()
         past = self.hold(b, f"BEGIN; {self.update([second])} SET CONSTRAINTS ALL IMMEDIATE; SELECT 'past the commit check';")
         past.stdout.readline()
-        grant = f"EXECUTE ON FUNCTION guard.undo(name) {{}} {WORKER};"  # damage that takes no lock the open transactions hold
+        grant = f"EXECUTE ON FUNCTION guard.undo(name, bigint) {{}} {WORKER};"  # damage that takes no lock the open transactions hold
         self.owner.sql("GRANT " + grant.format("TO"))
         round_ = keeper_round(self.keeper, self.database)
         self.owner.sql("REVOKE " + grant.format("FROM"))
@@ -832,7 +953,7 @@ class Attacks:
     def review(self):
         """Attacks the design without branches invites, beyond 011's suite: other statements that write rows."""
         before = self.state()
-        writer, _ = self.issue(**WIDE)
+        writer, _ = self.issue(strikes=10, **WIDE)  # five refusals in a row, each of which has to be the limit's own
         ids = ",".join(str(i) for i in range(2001, 2601))  # 600 rows
         for label, statement in (
                 ("copy_in_500_rows", "COPY shop.products(sku,name,price,stock) FROM STDIN WITH (FORMAT csv);\n"
@@ -907,6 +1028,73 @@ sys.exit(0 if answer != b'alive' else 3)
         told = tool("report", name)
         report = json.loads(told.stdout) if told.returncode == 0 else {}
         self.record("cli", "report_says_what_a_login_changed", report.get("changes") == 1 and report.get("undone") == 1, f"exit {told.returncode}; {report.get('tables')}")
+
+        # An agent that goes past its limits twice in a run with two strikes. It is stopped and cut off, and with
+        # --undo-on-stop what it changed since its first strike is put back; the change before that strike stays.
+        def reckless(ids, wait):
+            return f"""
+import argparse, os, sys, time
+sys.path.insert(0, {str(ROOT)!r})
+from db import Connection, sqlstate
+database = os.environ['PGDATABASE']
+connection = Connection(argparse.Namespace(config=None, database=database, role=None, password=False,
+    user=os.environ['PGUSER'], host='127.0.0.1', password_value=os.environ['PGPASSWORD']))
+codes = []
+for statement in ({self.update(ids[:1])!r}, 'DELETE FROM shop.orders;', {self.update(ids[1:2])!r}, 'DELETE FROM shop.orders;',
+                  {self.update(ids[2:])!r}):
+    result = connection.execute(statement, database)
+    codes.append((sqlstate(result.stderr) or '?') if result.returncode else 'landed')
+time.sleep({wait})
+codes.append('cut_off' if connection.execute('SELECT 1;', database).returncode else 'still_connects')
+print(os.environ['PGUSER'], *codes, flush=True)
+"""
+
+        def stopped_run(ids, wait, *options):
+            """(exit code, what the agent printed after its login, the login, what run said about the stop)."""
+            ran = tool("run", "--rows", "1000000", "--bytes", "100000000", "--hours", "0.2", "--prefix", "guard_atk", "--strikes", "2",
+                       *options, "--", sys.executable, "-c", reckless(ids, wait))
+            words = (ran.stdout.strip().splitlines() or [""])[-1].split()
+            said = [json.loads(line) for line in ran.stderr.splitlines() if line.startswith('{"stopped": "')]
+            return ran.returncode, words[1:] or [ran.stderr.strip()[-300:]], words[0] if words else "", said[0] if said else {}
+
+        ids = self.rows(3)
+        prices = lambda: [self.price(row) for row in ids]
+        code, did, login, said = stopped_run(ids, 6, "--interval", "1", "--undo-on-stop")
+        self.record("cli", "run_stops_an_agent_that_goes_past_its_limits_and_cuts_it_off",
+                    code == 3 and did == ["landed", "AB007", "landed", "AB007", "AB001", "cut_off"], f"exit {code}: {did}")
+        back = said.get("undo", {})
+        self.record("cli", "a_stopped_run_puts_back_what_came_after_its_first_strike",
+                    said.get("stopped") == login and back.get("undone") == 1 and back.get("kept") == 1 and not back.get("refused")
+                    and prices() == [11, 10, 10], f"{back.get('undone')} undone, {back.get('kept')} kept; prices {prices()}")
+        told = tool("report", login, "--timeline")
+        report = json.loads(told.stdout) if told.returncode == 0 else {}
+        steps = report.get("transactions", [])
+        self.record("cli", "report_shows_the_stop_and_the_timeline_after_the_login_is_gone",
+                    report.get("stopped") is True and report.get("strikes") == 2 and [(t["undone"], t["after_first_strike"]) for t in steps] == [(0, False), (1, True)],
+                    f"exit {told.returncode}; strikes {report.get('strikes')}; {json.dumps(steps)[:300]}")
+        back = tool("undo", login, "--from", str(steps[0]["from"])) if steps else told
+        result = json.loads(back.stdout) if back.returncode == 0 else {}
+        self.record("cli", "undo_from_a_point_on_the_command_line", result.get("undone") == 1 and prices() == [10, 10, 10],
+                    f"exit {back.returncode}; {result}; prices {prices()}")
+
+        # The same agent without --undo-on-stop, ending before the keeper's next round: the stop is still found when
+        # the command ends, nothing is undone, and undo --since-strike then does it by hand.
+        ids = self.rows(3)
+        code, did, login, said = stopped_run(ids, 0, "--interval", "60")
+        left = self.owner.sql(f"SELECT count(*) FROM pg_roles WHERE rolname='{login}';") if re.fullmatch(r"guard_atk_[0-9a-f]{12}", login) else "unknown"
+        self.record("cli", "a_stop_is_found_when_the_command_ends_before_the_keepers_round",
+                    code == 3 and did[:5] == ["landed", "AB007", "landed", "AB007", "AB001"] and said == {"stopped": login} and left == "0",
+                    f"exit {code}: {did}; run said {said}; {left} left")
+        self.record("cli", "without_undo_on_stop_nothing_is_undone", prices() == [11, 11, 10], f"prices {prices()}")
+        back = tool("undo", login, "--since-strike")
+        result = json.loads(back.stdout) if back.returncode == 0 else {}
+        self.record("cli", "undo_since_strike_on_the_command_line", result.get("undone") == 1 and result.get("kept") == 1 and prices() == [11, 10, 10],
+                    f"exit {back.returncode}; {result}; prices {prices()}")
+        back = tool("undo", login)
+        target, name = self.issue()
+        none = tool("undo", name, "--since-strike")
+        self.record("cli", "undo_since_strike_is_refused_for_a_login_with_no_strike", back.returncode == 0 and prices() == [10, 10, 10]
+                    and none.returncode == 1 and "no strike" in none.stderr, f"exit {none.returncode}: {none.stderr.strip()[:160]}")
 
         worker, _ = self.issue()
         stopped = tool("freeze", "code freeze: it's release day")
@@ -1015,7 +1203,7 @@ def main():
         try:
             attacks.set_up()
             for group in ("normal", "escalate", "guard_internals", "agents", "budgets", "incidents", "stopped", "held_up", "storage",
-                          "undo", "small_tables", "drift"):
+                          "undo", "strikes", "small_tables", "drift"):
                 getattr(attacks, group)()
             target, name = attacks.issue()
             attacks.ok(target, attacks.update(attacks.rows(1)))

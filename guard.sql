@@ -16,8 +16,12 @@
 --   limit. guard.boundary_problems() checks all of it from the catalog; the keeper's round freezes on
 --   a problem and ends stuck sessions, including any agent holding or waiting for a table lock
 --   stronger than ROW EXCLUSIVE (an agent that may UPDATE a table may LOCK it).
--- * Codes: AB000 frozen; AB002 row budget; AB003 storage budget; AB005 changed since (undo);
---   AB006 not READ COMMITTED; AB007 too large a share of a table, or TRUNCATE.
+-- * Going past a limit (AB002, AB003, AB007) is a strike against the login, and no rollback takes a
+--   strike back. At max_strikes the login is stopped (AB001): none of its statements writes, none of
+--   its transactions commits, and the keeper ends its sessions. guard.undo(login, from) then goes
+--   back to a point: the login's first strike, or any transaction guard.timeline lists.
+-- * Codes: AB000 frozen; AB001 stopped; AB002 row budget; AB003 storage budget; AB005 changed since
+--   (undo); AB006 not READ COMMITTED; AB007 too large a share of a table, or TRUNCATE.
 -- * guard.py uninstall takes all of this out again and puts back what guard.installed_over recorded.
 BEGIN;
 CREATE SCHEMA IF NOT EXISTS guard;
@@ -69,6 +73,12 @@ INSERT INTO guard.gate DEFAULT VALUES ON CONFLICT DO NOTHING;
 CREATE TABLE IF NOT EXISTS guard.budget(login name PRIMARY KEY,
   rows_left bigint NOT NULL CHECK (rows_left >= 0), bytes_left bigint NOT NULL CHECK (bytes_left >= 0),
   max_table_share numeric NOT NULL DEFAULT 0.1 CHECK (max_table_share > 0 AND max_table_share <= 1));
+-- strikes and struck_from are a retired login's last numbers; a living login's are in its two
+-- sequences (guard.strike). A login issued before strikes existed has no sequences: it is refused
+-- as before and never counted, until it expires.
+ALTER TABLE guard.budget ADD COLUMN IF NOT EXISTS max_strikes integer NOT NULL DEFAULT 3 CHECK (max_strikes >= 1);
+ALTER TABLE guard.budget ADD COLUMN IF NOT EXISTS strikes bigint NOT NULL DEFAULT 0;
+ALTER TABLE guard.budget ADD COLUMN IF NOT EXISTS struck_from bigint;
 -- size_before: the table's row count when the login first wrote it; the share is measured against it.
 CREATE TABLE IF NOT EXISTS guard.spend(login name NOT NULL, target regclass NOT NULL, size_before bigint NOT NULL,
   changed bigint NOT NULL DEFAULT 0, existing bigint NOT NULL DEFAULT 0, PRIMARY KEY (login, target));
@@ -96,10 +106,63 @@ CREATE OR REPLACE TRIGGER immutable_truncate BEFORE TRUNCATE ON guard.audit FOR 
 CREATE OR REPLACE TRIGGER immutable BEFORE UPDATE OR DELETE ON guard.undone FOR EACH ROW EXECUTE FUNCTION guard.immutable();
 CREATE OR REPLACE TRIGGER immutable_truncate BEFORE TRUNCATE ON guard.undone FOR EACH STATEMENT EXECUTE FUNCTION guard.immutable();
 
+-- A strike against a login. The refusal that follows rolls back everything its transaction wrote, but
+-- not a sequence, so each login has two, made with its budget and named by the md5 of its name:
+-- strikes_ counts them, and struck_from_ holds, from the first one on, the audit id from which every
+-- change of the login is newer than that strike. After a server crash a count above 0 can come back
+-- up to 32 higher, which stops the login: closed, not open.
+CREATE OR REPLACE FUNCTION guard.strike(p_login name) RETURNS bigint LANGUAGE plpgsql
+SET search_path = pg_catalog, guard, pg_temp AS $$
+DECLARE tag text := md5(p_login::text); n bigint;
+BEGIN
+  IF to_regclass('guard.strikes_' || tag) IS NULL THEN RETURN NULL; END IF;  -- no budget, or retired
+  n := nextval(('guard.strikes_' || tag)::regclass);
+  IF n = 1 THEN
+    PERFORM setval(('guard.struck_from_' || tag)::regclass, coalesce(pg_sequence_last_value('guard.audit_id_seq'::regclass), 0) + 1);
+  END IF;
+  RETURN n;
+END $$;
+
+-- A login's strikes, read where they are kept: its sequences, or its budget row once it is retired.
+CREATE OR REPLACE FUNCTION guard.strikes(p_login name, OUT strikes bigint, OUT max_strikes integer, OUT struck_from bigint,
+  OUT stopped boolean) LANGUAGE sql STABLE SET search_path = pg_catalog, guard, pg_temp AS $$
+  SELECT n.strikes, b.max_strikes, n.struck_from, n.strikes >= b.max_strikes
+  FROM guard.budget b CROSS JOIN LATERAL (SELECT
+    coalesce(pg_sequence_last_value(to_regclass('guard.strikes_' || md5(b.login::text))), b.strikes) AS strikes,
+    coalesce(pg_sequence_last_value(to_regclass('guard.struck_from_' || md5(b.login::text))), b.struck_from) AS struck_from) n
+  WHERE b.login = p_login
+$$;
+
+CREATE OR REPLACE FUNCTION guard.stopped(p_login name) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, guard, pg_temp AS $$
+  SELECT coalesce((guard.strikes(p_login)).stopped, false)
+$$;
+
+-- Going past a limit is a strike, and the agent is told how many it has left.
 CREATE OR REPLACE FUNCTION guard.refuse(p_code text, p_message text, p_detail jsonb, p_hint text) RETURNS void
 LANGUAGE plpgsql SET search_path = pg_catalog, guard, pg_temp AS $$
+DECLARE s record;
 BEGIN
+  IF p_code IN ('AB002', 'AB003', 'AB007') THEN
+    IF guard.strike(session_user) IS NOT NULL THEN  -- NULL: a login with no budget has no count
+      SELECT * INTO s FROM guard.strikes(session_user);
+      p_detail := coalesce(p_detail, '{}') || jsonb_build_object('strikes', s.strikes, 'max_strikes', s.max_strikes);
+      p_hint := p_hint || CASE WHEN s.stopped THEN ' That was this login''s last strike: it is now stopped.'
+        ELSE format(' That was strike %s of %s; at %s this login is stopped.', s.strikes, s.max_strikes, s.max_strikes) END;
+    END IF;
+  END IF;
   RAISE EXCEPTION '%', p_message USING ERRCODE = p_code, DETAIL = coalesce(p_detail::text, ''), HINT = p_hint;
+END $$;
+
+-- At max_strikes a login is stopped: none of its statements writes and none of its transactions commits.
+CREATE OR REPLACE FUNCTION guard.not_stopped() RETURNS void LANGUAGE plpgsql
+SET search_path = pg_catalog, guard, pg_temp AS $$
+BEGIN
+  IF guard.stopped(session_user) THEN
+    PERFORM guard.refuse('AB001', 'This login is stopped', jsonb_build_object('login', session_user) || to_jsonb(guard.strikes(session_user)),
+      'It went past its limits too many times. Nothing in this transaction was kept and nothing more can be written '
+      'with this login. Stop, and report this in your task status.');
+  END IF;
 END $$;
 
 -- Whoever may use guard_worker's privileges, through INHERIT or SET, is an agent; a superuser is the
@@ -137,14 +200,15 @@ BEGIN
   END IF;
 END $$;
 
--- Before any row is touched: frozen, isolation, TRUNCATE, a spent or missing budget (so a stopped
--- login never queues for a row lock), and the table's size the first time this login writes it.
+-- Before any row is touched: frozen, isolation, stopped, TRUNCATE, a spent or missing budget (so a
+-- stopped login never queues for a row lock), and the table's size the first time this login writes it.
 CREATE OR REPLACE FUNCTION guard.before_statement() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, guard, pg_temp AS $$
 DECLARE b guard.budget; table_size bigint;
 BEGIN
   IF NOT guard.is_agent() THEN RETURN NULL; END IF;
   PERFORM guard.gate_open();
+  PERFORM guard.not_stopped();
   IF TG_OP = 'TRUNCATE' THEN
     PERFORM guard.refuse('AB007', 'Agents cannot truncate', jsonb_build_object('table', TG_RELID::regclass::text),
       'Delete the rows you mean to change instead.');
@@ -238,7 +302,8 @@ BEGIN
   RETURN NULL;
 END $$;
 
--- At commit (deferred): a transaction in which an agent wrote does not commit while frozen.
+-- At commit (deferred): a transaction in which an agent wrote does not commit while frozen, or once
+-- its login is stopped.
 CREATE OR REPLACE FUNCTION guard.at_commit() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, guard, pg_temp AS $$
 DECLARE reason text;
@@ -248,6 +313,7 @@ BEGIN
     PERFORM guard.refuse('AB000', 'Writes are frozen', jsonb_build_object('reason', coalesce(reason, 'guard.gate is empty')),
       'Nothing in this transaction was kept. Reads still work. Stop writing and report this reason in your task status.');
   END IF;
+  PERFORM guard.not_stopped();
   DELETE FROM guard.commit_check c WHERE c.tx = NEW.tx;
   RETURN NULL;
 END $$;
@@ -289,17 +355,33 @@ SET search_path = pg_catalog, guard, pg_temp AS $$
   ON CONFLICT (fn) DO UPDATE SET definition_md5 = EXCLUDED.definition_md5, reason = EXCLUDED.reason
 $$;
 
--- For the broker. Insert only: no top-ups, and a retired login's name cannot be issued again.
-CREATE OR REPLACE FUNCTION guard.issue_budget(p_login name, p_rows bigint, p_bytes bigint, p_share numeric DEFAULT 0.1) RETURNS void
-LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, guard, pg_temp AS $$
-  INSERT INTO guard.budget VALUES (p_login, p_rows, p_bytes, p_share)
-$$;
+-- For the broker. Insert only: no top-ups, and a retired login's name cannot be issued again. The
+-- login's two sequences for its strikes are made here (guard.strike).
+DROP FUNCTION IF EXISTS guard.issue_budget(name, bigint, bigint, numeric);  -- as it was before strikes
+CREATE OR REPLACE FUNCTION guard.issue_budget(p_login name, p_rows bigint, p_bytes bigint, p_share numeric DEFAULT 0.1,
+  p_strikes integer DEFAULT 3) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, guard, pg_temp AS $$
+BEGIN
+  INSERT INTO guard.budget(login, rows_left, bytes_left, max_table_share, max_strikes) VALUES (p_login, p_rows, p_bytes, p_share, p_strikes);
+  EXECUTE format('CREATE SEQUENCE guard.%I', 'strikes_' || md5(p_login::text));
+  EXECUTE format('CREATE SEQUENCE guard.%I', 'struck_from_' || md5(p_login::text));
+END $$;
 
--- Spends a login's whole budget: every write it tries is then refused before touching a row.
-CREATE OR REPLACE FUNCTION guard.stop_agent(p_login name) RETURNS void LANGUAGE sql SECURITY DEFINER
+-- Spends a login's whole budget: every write it tries is then refused before touching a row. Once
+-- the login can no longer connect (retired), its strikes move into its budget row and its two
+-- sequences go, so none is left behind for every login there ever was. The sequences come before the
+-- budget row, the order in which a write of the login itself locks them.
+CREATE OR REPLACE FUNCTION guard.stop_agent(p_login name) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, guard, pg_temp AS $$
-  UPDATE guard.budget SET rows_left = 0, bytes_left = 0 WHERE login = p_login
-$$;
+DECLARE tag text := md5(p_login::text); s record;
+BEGIN
+  IF to_regclass('guard.strikes_' || tag) IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = p_login AND r.rolcanlogin) THEN
+    SELECT * INTO s FROM guard.strikes(p_login);
+    EXECUTE format('DROP SEQUENCE guard.%I, guard.%I', 'strikes_' || tag, 'struck_from_' || tag);
+    UPDATE guard.budget SET strikes = s.strikes, struck_from = s.struck_from WHERE login = p_login;
+  END IF;
+  UPDATE guard.budget SET rows_left = 0, bytes_left = 0 WHERE login = p_login;
+END $$;
 
 -- Tighten only. The first reason stays.
 CREATE OR REPLACE FUNCTION guard.freeze(p_reason text) RETURNS void LANGUAGE sql SECURITY DEFINER
@@ -316,13 +398,16 @@ $$;
 
 -- Undo a login's changes newest first, checking and putting back only the columns it changed. Stops
 -- at the first change something newer has touched, and says which: undoing older ones around it
--- would leave a state nobody had. A rerun picks up where this stopped.
-CREATE OR REPLACE FUNCTION guard.undo(p_login name) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+-- would leave a state nobody had. A rerun picks up where this stopped. With p_from, only that change
+-- and the login's later ones are undone, and its older ones are kept: p_from is the "from" of a
+-- transaction in guard.timeline, or the login's struck_from, the state before its first strike.
+DROP FUNCTION IF EXISTS guard.undo(name);  -- as it was before p_from
+CREATE OR REPLACE FUNCTION guard.undo(p_login name, p_from bigint DEFAULT NULL) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, guard, pg_temp
 SET TimeZone = 'UTC' SET IntervalStyle = 'postgres' SET extra_float_digits = 1 SET bytea_output = 'hex' AS $$
 DECLARE a guard.audit; keys text[]; doc jsonb; now_doc jsonb; key_where text; set_list text; n integer := 0; refused jsonb;
 BEGIN
-  FOR a IN SELECT x.* FROM guard.audit x WHERE x.login = p_login
+  FOR a IN SELECT x.* FROM guard.audit x WHERE x.login = p_login AND x.id >= coalesce(p_from, 0)
              AND NOT EXISTS (SELECT 1 FROM guard.undone u WHERE u.audit_id = x.id) ORDER BY x.id DESC LOOP
     SELECT g.pk_columns INTO keys FROM guard.guarded g WHERE g.target = a.target;
     doc := coalesce(a.after, a.before);
@@ -348,17 +433,20 @@ BEGIN
     INSERT INTO guard.undone(audit_id) VALUES (a.id);
     n := n + 1;
   END LOOP;
-  RETURN jsonb_build_object('login', p_login, 'undone', n, 'refused', refused,
-    'remaining', (SELECT count(*) FROM guard.audit x WHERE x.login = p_login
-                  AND NOT EXISTS (SELECT 1 FROM guard.undone u WHERE u.audit_id = x.id)));
+  RETURN jsonb_build_object('login', p_login, 'from', p_from, 'undone', n, 'refused', refused,
+    'remaining', (SELECT count(*) FROM guard.audit x WHERE x.login = p_login AND x.id >= coalesce(p_from, 0)
+                  AND NOT EXISTS (SELECT 1 FROM guard.undone u WHERE u.audit_id = x.id)),
+    'kept', (SELECT count(*) FROM guard.audit x WHERE x.login = p_login AND x.id < coalesce(p_from, 0)
+             AND NOT EXISTS (SELECT 1 FROM guard.undone u WHERE u.audit_id = x.id)));
 END $$;
 
--- What a login really changed, from the audit log and not from anything it says. Works after the
--- login is retired.
+-- What a login really changed, from the audit log and not from anything it says, and its strikes.
+-- Works after the login is retired.
 CREATE OR REPLACE FUNCTION guard.report(p_login name) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, guard, pg_temp AS $$
-  SELECT jsonb_build_object('login', p_login,
+  SELECT to_jsonb(s) || jsonb_build_object('login', p_login,
     'changes', (SELECT count(*) FROM guard.audit a WHERE a.login = p_login),
+    'changes_since_first_strike', (SELECT count(*) FROM guard.audit a WHERE a.login = p_login AND a.id >= s.struck_from),
     'undone', (SELECT count(*) FROM guard.audit a JOIN guard.undone u ON u.audit_id = a.id WHERE a.login = p_login),
     'first', (SELECT min(a.at) FROM guard.audit a WHERE a.login = p_login),
     'last', (SELECT max(a.at) FROM guard.audit a WHERE a.login = p_login),
@@ -366,10 +454,28 @@ SET search_path = pg_catalog, guard, pg_temp AS $$
                  SELECT a.target::text AS t, jsonb_build_object('inserted', count(*) FILTER (WHERE a.op = 'I'),
                    'updated', count(*) FILTER (WHERE a.op = 'U'), 'deleted', count(*) FILTER (WHERE a.op = 'D')) AS ops
                  FROM guard.audit a WHERE a.login = p_login GROUP BY a.target) z),
-    'budget', (SELECT to_jsonb(b) - 'login' FROM guard.budget b WHERE b.login = p_login))
+    'budget', (SELECT jsonb_build_object('rows_left', b.rows_left, 'bytes_left', b.bytes_left, 'max_table_share', b.max_table_share)
+               FROM guard.budget b WHERE b.login = p_login))
+  FROM guard.strikes(p_login) s
 $$;
 
--- An agent's own view: its budget, what it has changed, its expiry, and the freeze.
+-- A login's transactions, oldest first, for choosing how far back to undo: "from" is a transaction's
+-- first change, and guard.undo(login, from) undoes that transaction and all the login did after it.
+CREATE OR REPLACE FUNCTION guard.timeline(p_login name) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, guard, pg_temp AS $$
+  SELECT coalesce(jsonb_agg(jsonb_build_object('from', t.from_id, 'at', t.began, 'changes', t.changes, 'undone', t.undone,
+      'after_first_strike', coalesce(t.from_id >= s.struck_from, false), 'tables', t.tables) ORDER BY t.from_id), '[]'::jsonb)
+  FROM guard.strikes(p_login) s, (
+    SELECT min(x.from_id) AS from_id, min(x.began) AS began, sum(x.changes) AS changes, sum(x.undone) AS undone,
+           jsonb_object_agg(x.target, jsonb_build_object('inserted', x.inserted, 'updated', x.updated, 'deleted', x.deleted)) AS tables
+    FROM (SELECT a.tx, a.target::text AS target, min(a.id) AS from_id, min(a.at) AS began, count(*) AS changes,
+                 count(u.audit_id) AS undone, count(*) FILTER (WHERE a.op = 'I') AS inserted,
+                 count(*) FILTER (WHERE a.op = 'U') AS updated, count(*) FILTER (WHERE a.op = 'D') AS deleted
+          FROM guard.audit a LEFT JOIN guard.undone u ON u.audit_id = a.id WHERE a.login = p_login GROUP BY a.tx, a.target) x
+    GROUP BY x.tx) t
+$$;
+
+-- An agent's own view: its budget, its strikes, what it has changed, its expiry, and the freeze.
 CREATE OR REPLACE FUNCTION guard.status() RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, guard, pg_temp AS $$
   SELECT jsonb_build_object('login', session_user, 'rows_left', b.rows_left, 'bytes_left', b.bytes_left,
@@ -377,6 +483,7 @@ SET search_path = pg_catalog, guard, pg_temp AS $$
     'changed', (SELECT coalesce(jsonb_object_agg(s.target::text, s.changed), '{}') FROM guard.spend s WHERE s.login = session_user),
     'valid_until', (SELECT r.rolvaliduntil FROM pg_roles r WHERE r.rolname = session_user),
     'frozen', (SELECT g.frozen_reason FROM guard.gate g))
+    || coalesce(to_jsonb(guard.strikes(session_user)) - 'struck_from', '{}')
   FROM (SELECT 1) one LEFT JOIN guard.budget b ON b.login = session_user
 $$;
 
@@ -397,9 +504,10 @@ CREATE OR REPLACE FUNCTION guard.boundary_problems() RETURNS jsonb LANGUAGE sql 
 SET search_path = pg_catalog, guard, pg_temp AS $$
   WITH boundary(role, may_execute) AS (VALUES
     ('guard_worker'::regrole, ARRAY['guard.status()']),
-    ('guard_keeper'::regrole, ARRAY['guard.report(name)', 'guard.freeze(text)', 'guard.stop_agent(name)', 'guard.undo(name)',
-      'guard.boundary_check()', 'guard.boundary_status()', 'guard.end_stuck_sessions(integer,integer,boolean)', 'guard.agent_logins()']),
-    ('guard_broker'::regrole, ARRAY['guard.issue_budget(name,bigint,bigint,numeric)', 'guard.stop_agent(name)'])
+    ('guard_keeper'::regrole, ARRAY['guard.report(name)', 'guard.timeline(name)', 'guard.freeze(text)', 'guard.stop_agent(name)',
+      'guard.stopped(name)', 'guard.undo(name,bigint)', 'guard.boundary_check()', 'guard.boundary_status()',
+      'guard.end_stuck_sessions(integer,integer,boolean)', 'guard.agent_logins()']),
+    ('guard_broker'::regrole, ARRAY['guard.issue_budget(name,bigint,bigint,numeric,integer)', 'guard.stop_agent(name)'])
   ), agent_login AS (
     SELECT r.* FROM guard.agent_logins() a JOIN pg_roles r ON r.oid = a
   ), func AS (
@@ -459,6 +567,10 @@ SET search_path = pg_catalog, guard, pg_temp AS $$
     SELECT b.role::text || ' may read guard.' || c.relname FROM boundary b CROSS JOIN pg_class c
     WHERE c.relnamespace = 'guard'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm') AND has_table_privilege(b.role::oid, c.oid, 'SELECT')
     UNION ALL
+    -- The strikes are kept in sequences: a role that could set one could take a strike back.
+    SELECT b.role::text || ' may use the sequence guard.' || c.relname FROM boundary b CROSS JOIN pg_class c
+    WHERE c.relnamespace = 'guard'::regnamespace AND c.relkind = 'S' AND has_sequence_privilege(b.role::oid, c.oid, 'USAGE,SELECT,UPDATE')
+    UNION ALL
     SELECT b.role::text || ' may create in schema ' || n.nspname FROM boundary b CROSS JOIN pg_namespace n
     WHERE n.nspname NOT LIKE 'pg\_%' AND n.nspname <> 'information_schema' AND has_schema_privilege(b.role::oid, n.oid, 'CREATE')
     UNION ALL
@@ -517,8 +629,10 @@ SET search_path = pg_catalog, guard, pg_temp AS $$
     'problems', guard.boundary_problems(),
     'logins', (SELECT coalesce(jsonb_agg(jsonb_build_object('login', r.rolname, 'rows_left', b.rows_left,
         'bytes_left', b.bytes_left, 'valid_until', r.rolvaliduntil,
-        'sessions', (SELECT count(*) FROM pg_stat_activity a WHERE a.usesysid = r.oid)) ORDER BY r.rolname), '[]'::jsonb)
-      FROM guard.agent_logins() x JOIN pg_roles r ON r.oid = x LEFT JOIN guard.budget b ON b.login = r.rolname WHERE r.rolcanlogin),
+        'sessions', (SELECT count(*) FROM pg_stat_activity a WHERE a.usesysid = r.oid),
+        'strikes', (guard.strikes(r.rolname)).strikes, 'stopped', guard.stopped(r.rolname)) ORDER BY r.rolname), '[]'::jsonb)
+      FROM guard.agent_logins() x JOIN pg_roles r ON r.oid = x LEFT JOIN guard.budget b ON b.login = r.rolname
+      WHERE r.rolcanlogin OR guard.stopped(r.rolname)),
     'open_databases', (SELECT coalesce(jsonb_agg(o.datname ORDER BY o.datname), '[]'::jsonb) FROM open_database o
       WHERE o.datname NOT LIKE 'agentdb\_test\_%'),
     'open_test_databases', (SELECT count(*) FROM open_database o WHERE o.datname LIKE 'agentdb\_test\_%'))
@@ -537,12 +651,14 @@ END $$;
 
 -- The keeper's rules, as the keeper (pg_signal_backend can end only non-superuser sessions). Beyond
 -- 011's: an agent holding or waiting for a table lock stronger than ROW EXCLUSIVE ends at once, since
--- such a lock, or a request for one, stops the application's own statements on that table.
+-- such a lock, or a request for one, stops the application's own statements on that table. And every
+-- session of a stopped login ends, whatever it is doing.
 CREATE OR REPLACE FUNCTION guard.end_stuck_sessions(p_idle_seconds integer, p_transaction_seconds integer, p_frozen boolean)
 RETURNS jsonb LANGUAGE sql SET search_path = pg_catalog, guard, pg_temp AS $$
   WITH session AS (
     SELECT a.pid, r.rolname AS login, CASE
         WHEN NOT r.rolcanlogin OR r.rolvaliduntil <= clock_timestamp() THEN 'login expired'
+        WHEN guard.stopped(r.rolname) THEN 'login stopped'
         WHEN p_frozen AND a.backend_xid IS NOT NULL THEN 'writing while frozen'
         WHEN EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = a.pid AND l.locktype = 'relation'
                        AND l.mode IN ('ShareUpdateExclusiveLock', 'ShareLock', 'ShareRowExclusiveLock', 'ExclusiveLock', 'AccessExclusiveLock'))
@@ -565,10 +681,10 @@ $$;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA guard FROM PUBLIC;
 GRANT USAGE ON SCHEMA guard TO guard_worker, guard_keeper, guard_broker;
 GRANT EXECUTE ON FUNCTION guard.status() TO guard_worker;
-GRANT EXECUTE ON FUNCTION guard.report(name), guard.freeze(text), guard.stop_agent(name), guard.undo(name),
-  guard.boundary_check(), guard.boundary_status(), guard.end_stuck_sessions(integer, integer, boolean), guard.agent_logins()
-  TO guard_keeper;
-GRANT EXECUTE ON FUNCTION guard.issue_budget(name, bigint, bigint, numeric), guard.stop_agent(name) TO guard_broker;
+GRANT EXECUTE ON FUNCTION guard.report(name), guard.timeline(name), guard.freeze(text), guard.stop_agent(name), guard.stopped(name),
+  guard.undo(name, bigint), guard.boundary_check(), guard.boundary_status(), guard.end_stuck_sessions(integer, integer, boolean),
+  guard.agent_logins() TO guard_keeper;
+GRANT EXECUTE ON FUNCTION guard.issue_budget(name, bigint, bigint, numeric, integer), guard.stop_agent(name) TO guard_broker;
 
 UPDATE guard.gate SET fingerprint = guard.fingerprint(),
   superuser_logins = ARRAY(SELECT rolname FROM pg_roles WHERE rolsuper AND rolcanlogin ORDER BY rolname);

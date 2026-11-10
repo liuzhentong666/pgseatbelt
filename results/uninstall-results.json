@@ -11,7 +11,7 @@
     {
       "name": "dropping_the_roles_is_refused_while_another_database_has_the_guard",
       "status": "HOLDS",
-      "detail": "The guard is still installed in agentdb_test_unin_b_99035029; its roles are shared there, so nothing was changed"
+      "detail": "The guard is still installed in agentdb_test_unin_b_23953716; its roles are shared there, so nothing was changed"
     },
     {
       "name": "uninstall_puts_back_every_right_schema_and_trigger",
@@ -21,7 +21,7 @@
     {
       "name": "the_audit_log_is_saved_first",
       "status": "HOLDS",
-      "detail": "1 rows in agentdb_test_unin_a_99035029-guard-audit-20261109-223950.json"
+      "detail": "1 rows in agentdb_test_unin_a_23953716-guard-audit-20261110-082557.json; strikes and stopped by login: {'guard_atk_e39db8df5c5c': (0, False)}"
     },
     {
       "name": "the_agents_change_stays",
@@ -51,7 +51,7 @@
     {
       "name": "uninstall_from_the_command_line_with_drop_roles",
       "status": "HOLDS",
-      "detail": "exit 0; dropped ['guard_atk_95ae291f46b3', 'guard_atk_a75a3ba4678a', 'guard_atk_b90808e67041', 'guard_broker', 'guard_keeper', 'guard_worker']; "
+      "detail": "exit 0; dropped ['guard_atk_7d4eac872b5f', 'guard_atk_beb4f948ccb8', 'guard_atk_e39db8df5c5c', 'guard_broker', 'guard_keeper', 'guard_worker']; "
     },
     {
       "name": "a_database_locked_before_stays_locked",
@@ -71,7 +71,7 @@
     {
       "name": "uninstall_where_there_is_no_guard_is_refused",
       "status": "HOLDS",
-      "detail": "The guard is not installed in agentdb_test_unin_b_99035029"
+      "detail": "The guard is not installed in agentdb_test_unin_b_23953716"
     }
   ]
 }

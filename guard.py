@@ -4,11 +4,16 @@
   uninstall take it all out again as the owner, saving the audit log first; --drop-roles also drops
             the three roles and the logins the broker issued
   run      issue a login, run a command with it in PGUSER, PGPASSWORD and the like, keep the keeper's
-            rounds going meanwhile, and retire the login when the command ends
-  status    frozen or not, what the self-check finds, each login's budget
-  keep      the keeper's rounds alone: self-check (a problem freezes writes), end stuck sessions
-  undo      stop a login and undo its changes, newest first
-  report    what a login really changed, from the audit log
+            rounds going meanwhile, and retire the login when the command ends. A login that goes past
+            its limits --strikes times is stopped: it cannot write or connect again, and with
+            --undo-on-stop what it changed since its first strike is put back
+  status    frozen or not, what the self-check finds, each login's budget and strikes
+  keep      the keeper's rounds alone: self-check (a problem freezes writes), end stuck sessions and
+            the sessions of stopped logins
+  undo      stop a login and undo its changes, newest first: all of them, or back to a point with
+            --from or --since-strike
+  report    what a login really changed, from the audit log, and its strikes; --timeline lists its
+            transactions, for choosing the point undo --from goes back to
   freeze    stop every agent's writes now; unfreeze is the owner's
   backup    dump the database outside itself, and keep the dump only if it restores
 
@@ -70,7 +75,7 @@ def install(owner, database, protect=()):
 AUDIT_SQL = """SELECT json_build_object('database', current_database(), 'saved_at', clock_timestamp(),
   'audit', (SELECT coalesce(json_agg(a ORDER BY a.id), '[]') FROM guard.audit a),
   'undone', (SELECT coalesce(json_agg(u ORDER BY u.audit_id), '[]') FROM guard.undone u),
-  'budgets', (SELECT coalesce(json_agg(b ORDER BY b.login), '[]') FROM guard.budget b));"""
+  'budgets', (SELECT coalesce(json_agg(to_jsonb(b) || to_jsonb(guard.strikes(b.login)) ORDER BY b.login), '[]') FROM guard.budget b));"""
 
 # One transaction: the guard's triggers off the protected tables, every grant to the three roles revoked
 # (CASCADE takes the CONNECT the broker gave each agent login with it), PUBLIC's rights put back as
@@ -164,12 +169,13 @@ def uninstall(owner, database, audit_to, drop_roles=False):
 
 
 def issue_login(broker, database, rows, size, hours, connections=4, temp_file_limit="100MB", prefix="agent",
-                max_table_share=0.1):
+                max_table_share=0.1, strikes=3):
     """(login, password, valid_until) of a new login, on a connection running as guard_broker."""
     database_name(database)
     if not re.fullmatch(SIZE, temp_file_limit):
         raise ValueError("temp_file_limit must look like 100MB")
-    for value, label, floor in ((rows, "rows", 0), (size, "bytes", 0), (hours, "hours", 1e-9), (connections, "connections", 1)):
+    for value, label, floor in ((rows, "rows", 0), (size, "bytes", 0), (hours, "hours", 1e-9), (connections, "connections", 1),
+                                (strikes, "strikes", 1)):
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < floor:
             raise ValueError(f"{label} must be at least {floor}")
     if isinstance(max_table_share, bool) or not isinstance(max_table_share, (int, float)) or not 0 < max_table_share <= 1:
@@ -186,7 +192,7 @@ GRANT CONNECT ON DATABASE "{database}" TO {name};
 ALTER ROLE {name} SET temp_file_limit='{temp_file_limit}';
 ALTER ROLE {name} SET idle_in_transaction_session_timeout='60s';
 ALTER ROLE {name} SET log_statement='all';
-SELECT guard.issue_budget('{name}',{int(rows)},{int(size)},{float(max_table_share)});
+SELECT guard.issue_budget('{name}',{int(rows)},{int(size)},{float(max_table_share)},{int(strikes)});
 COMMIT;""", database)
     return name, password, until
 
@@ -207,24 +213,37 @@ COMMIT;""", database)
 
 
 def keeper_round(keeper, database=None, idle=THRESHOLDS["idle"], transaction=THRESHOLDS["transaction"]):
-    """One round as guard_keeper: the self-check (a problem freezes writes), then the stuck sessions."""
+    """One round as guard_keeper: the self-check (a problem freezes writes), then the stuck sessions and
+    every session of a stopped login."""
     status = json.loads(keeper.sql("SELECT guard.boundary_check();", database))
     ended = json.loads(keeper.sql(
         f"SELECT guard.end_stuck_sessions({int(idle)},{int(transaction)},{'true' if status['frozen'] else 'false'});", database))
-    return dict(frozen=status["frozen"], problems=status["problems"], ended=ended, logins=len(status["logins"]))
+    return dict(frozen=status["frozen"], problems=status["problems"], ended=ended, logins=len(status["logins"]),
+                stopped=[login["login"] for login in status["logins"] if login["stopped"]])
 
 
-def undo_login(keeper, login, database=None):
-    """Stop a login, then undo its changes newest first; stops at newer work and says why."""
+def undo_login(keeper, login, database=None, start=None, since_strike=False):
+    """Stop a login, then undo its changes newest first; stops at newer work and says why.
+
+    Everything it changed, or back to a point, keeping what it did before: start is the audit id of the
+    first change to undo (the "from" of a transaction in guard.timeline), and since_strike takes the
+    login's own struck_from, which gives the state before it first went past a limit.
+    """
     if not re.fullmatch(LOGIN, login):
         raise ValueError("Not a login name")
+    if since_strike:
+        start = json.loads(keeper.sql(f"SELECT guard.report('{login}');", database))["struck_from"]
+        if start is None:
+            raise ValueError(f"{login} has no strike to go back to")
+    if start is not None and (isinstance(start, bool) or not isinstance(start, int) or start < 0):
+        raise ValueError("The change to undo from is a whole number, as report --timeline shows it")
     # Sessions end first, since an open transaction could hold the budget row guard.stop_agent updates
     # or a row undo has to put back, and again after, for one that reconnected in between.
     end = f"SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename='{login}';"
     keeper.sql(end, database)
     keeper.sql(f"SELECT guard.stop_agent('{login}');", database)
     keeper.sql(end, database)
-    result = keeper.execute(f"SELECT guard.undo('{login}');", database)
+    result = keeper.execute(f"SELECT guard.undo('{login}', {'NULL' if start is None else start});", database)
     if result.returncode:
         return dict(login=login, undone=0, remaining=None, refused=dict(error=result.stderr.strip()[:1000]))
     return json.loads(result.stdout)
@@ -240,28 +259,50 @@ def run(args):
     broker, keeper = connect(args, BROKER), connect(args, KEEPER)
     database = broker.settings["database"]
     login, password, until = issue_login(broker, database, args.rows, args.bytes, args.hours, args.connections,
-                                         args.temp_file_limit, args.prefix, args.max_table_share)
+                                         args.temp_file_limit, args.prefix, args.max_table_share, args.strikes)
     host = args.agent_host or broker.settings["host"]
     environment = {name: os.environ[name] for name in (*PASSED_ENVIRONMENT, *args.pass_env) if name in os.environ}
     environment.update(PGUSER=login, PGPASSWORD=password, PGDATABASE=database,
                        PGHOST="127.0.0.1" if host.startswith("/") else host, PGPORT=str(broker.settings["port"]))
     say(json.dumps(dict(login=login, database=database, valid_until=until, rows=args.rows, bytes=args.bytes,
-                        max_table_share=args.max_table_share)))
-    stop = threading.Event()
-    rounds = threading.Thread(target=keep, args=(args, stop), daemon=True)
+                        max_table_share=args.max_table_share, strikes=args.strikes)))
+    stop, once, handled = threading.Event(), threading.Lock(), []
+
+    def stopped(name):
+        """This run's login is stopped: it may not connect again either, and with --undo-on-stop what it
+        changed since its first strike is put back. Called by the keeper's rounds, and once more at the end."""
+        with once:
+            if name != login or handled:
+                return
+            broker.sql(f"ALTER ROLE {login} NOLOGIN;", database)
+            report = dict(stopped=login)
+            if args.undo_on_stop:
+                try:
+                    report["undo"] = undo_login(keeper, login, database, since_strike=True)
+                except ValueError as error:  # no first strike on record: nothing is undone, and the report says so
+                    report["undo"] = dict(undone=0, refused=dict(error=str(error)))
+            handled.append(login)
+            say(json.dumps(report))
+    rounds = threading.Thread(target=keep, args=(args, stop, stopped), daemon=True)
     rounds.start()
     try:
-        return subprocess.run(args.command[1:], env=environment).returncode
+        code = subprocess.run(args.command[1:], env=environment).returncode
     finally:
         stop.set()
         rounds.join(timeout=60)
-        retire_login(broker, keeper, database, login)
+        try:  # a command that ended before the keeper's next round
+            if keeper.sql(f"SELECT guard.stopped('{login}');", database) == "t":
+                stopped(login)
+        finally:
+            retire_login(broker, keeper, database, login)
+    return code or (3 if handled else 0)  # a stopped run never looks like a clean one
 
 
-def keep(args, stop=None):
-    """The keeper's rounds every --interval seconds until stop is set, or one with --once (exit 1 if it failed)."""
+def keep(args, stop=None, on_stopped=None):
+    """The keeper's rounds every --interval seconds until stop is set, or one with --once (exit 1 if it failed).
+    A login found stopped is reported once, and handed to on_stopped until that succeeds."""
     stop = stop or threading.Event()
-    session = None
+    session, told = None, set()
     try:
         while True:
             failed = False
@@ -269,8 +310,13 @@ def keep(args, stop=None):
                 session = session or connect(args, KEEPER).session()
                 report = keeper_round(session, idle=args.idle_seconds or THRESHOLDS["idle"],
                                       transaction=args.transaction_seconds or THRESHOLDS["transaction"])
-                if report["frozen"] or report["ended"] or report["problems"]:
+                new = [login for login in report["stopped"] if login not in told]
+                if report["frozen"] or report["ended"] or report["problems"] or new:
                     say(json.dumps(report))
+                for login in new:
+                    if on_stopped:
+                        on_stopped(login)
+                    told.add(login)
             except (ValueError, RuntimeError, OSError, subprocess.TimeoutExpired) as error:
                 say(f"keeper round failed: {' '.join(str(error).split())}")
                 failed = True
@@ -353,6 +399,10 @@ def main():
     start.add_argument("--prefix", default="agent", help="the start of the login's name")
     start.add_argument("--max-table-share", type=float, default=0.1,
                        help="beyond its first 20 rows, the share of a table it may change; 1 means no limit")
+    start.add_argument("--strikes", type=int, default=3,
+                       help="how many times it may be refused for going past a limit; at the last one it is stopped")
+    start.add_argument("--undo-on-stop", action="store_true",
+                       help="when it is stopped, undo what it changed since its first strike")
     start.add_argument("--pass-env", action="append", default=[], help="pass this variable on to the command; repeat as needed")
     start.add_argument("--agent-host", help="the server's address as the command sees it, e.g. host.docker.internal")
     start.add_argument("command", nargs=argparse.REMAINDER, help="-- the agent's command")
@@ -364,10 +414,15 @@ def main():
         action.add_argument("--interval", type=float, default=5, help="seconds between the keeper's rounds")
         action.add_argument("--idle-seconds", type=seconds, help="end a session idle in a transaction this long; default 60")
         action.add_argument("--transaction-seconds", type=seconds, help="end a transaction open this long; default 300")
-    back = actions.add_parser("undo", help="stop a login and undo its changes")
+    back = actions.add_parser("undo", help="stop a login and undo its changes: all of them, or back to a point")
     back.add_argument("login")
-    told = actions.add_parser("report", help="what a login changed, from the audit log")
+    point = back.add_mutually_exclusive_group()
+    point.add_argument("--from", dest="start", type=int, metavar="CHANGE",
+                       help="undo only this change and the login's later ones; report --timeline lists them")
+    point.add_argument("--since-strike", action="store_true", help="undo only what the login changed since its first strike")
+    told = actions.add_parser("report", help="what a login changed, from the audit log, and its strikes")
     told.add_argument("login")
+    told.add_argument("--timeline", action="store_true", help="also its transactions, each with the change undo --from takes")
     stop = actions.add_parser("freeze", help="stop every agent's writes now; reads go on")
     stop.add_argument("reason")
     actions.add_parser("unfreeze", help="open writes again; only the database owner can")
@@ -394,10 +449,14 @@ def main():
         if args.action == "report":
             if not re.fullmatch(LOGIN, args.login):
                 raise ValueError("Not a login name")
-            print(json.dumps(json.loads(connect(args, KEEPER).sql(f"SELECT guard.report('{args.login}');")), indent=2))
+            keeper = connect(args, KEEPER)
+            report = json.loads(keeper.sql(f"SELECT guard.report('{args.login}');"))
+            if args.timeline:
+                report["transactions"] = json.loads(keeper.sql(f"SELECT guard.timeline('{args.login}');"))
+            print(json.dumps(report, indent=2))
             return
         if args.action == "undo":
-            result = undo_login(connect(args, KEEPER), args.login)
+            result = undo_login(connect(args, KEEPER), args.login, start=args.start, since_strike=args.since_strike)
             print(json.dumps(result, indent=2))
             sys.exit(0 if not result["refused"] else 1)
         if args.action == "freeze":
