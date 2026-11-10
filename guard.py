@@ -19,6 +19,7 @@ except in the command's environment, and reaches the server only as a SCRAM veri
 """
 import argparse
 import base64
+import getpass
 import hashlib
 import hmac
 import json
@@ -59,49 +60,102 @@ def scram_verifier(password):
 
 def install(owner, database, protect=()):
     """guard.sql as the owner (re-runnable), then guard.protect for each table named."""
-    owner.sql((HERE / "guard.sql").read_text(encoding="utf-8"), database)
-    for table in protect:
+    for table in protect:  # every name first, so a typo stops it before anything changes
         if not re.fullmatch(r"[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*", table):
             raise ValueError(f"Not a schema-qualified table name: {table}")
+    owner.sql((HERE / "guard.sql").read_text(encoding="utf-8"), database)
+    for table in protect:
         owner.sql(f"SELECT guard.protect('{table}');", database)
     return json.loads(owner.sql("SELECT guard.boundary_problems();", database))
 
 
-AUDIT_SQL = """SELECT json_build_object('database', current_database(), 'saved_at', clock_timestamp(),
-  'audit', (SELECT coalesce(json_agg(a ORDER BY a.id), '[]') FROM guard.audit a),
-  'undone', (SELECT coalesce(json_agg(u ORDER BY u.audit_id), '[]') FROM guard.undone u),
-  'budgets', (SELECT coalesce(json_agg(b ORDER BY b.login), '[]') FROM guard.budget b));"""
+# The audit log, undo records and budgets as one JSON document, written row by row: psql fetches
+# FETCH_COUNT rows at a time, so neither the server nor this process holds the whole log at once.
+AUDIT_EXPORT = """BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+\\set FETCH_COUNT 10000
+SELECT '{"database": ' || to_json(current_database()) || ', "saved_at": ' || to_json(clock_timestamp()) || ', "audit": [';
+SELECT CASE WHEN row_number() OVER (ORDER BY a.id) > 1 THEN ', ' ELSE '' END || row_to_json(a) FROM guard.audit a ORDER BY a.id;
+SELECT '], "undone": [';
+SELECT CASE WHEN row_number() OVER (ORDER BY u.audit_id) > 1 THEN ', ' ELSE '' END || row_to_json(u) FROM guard.undone u ORDER BY u.audit_id;
+SELECT '], "budgets": [';
+SELECT CASE WHEN row_number() OVER (ORDER BY b.login) > 1 THEN ', ' ELSE '' END || row_to_json(b) FROM guard.budget b ORDER BY b.login;
+SELECT ']}';
+COMMIT;"""
 
-# One transaction: the guard's triggers off the protected tables, every grant to the three roles revoked
-# (CASCADE takes the CONNECT the broker gave each agent login with it), PUBLIC's rights put back as
-# guard.installed_over recorded them, and the guard's schema dropped.
-UNINSTALL_SQL = """BEGIN;
-DO $uninstall$
-DECLARE was guard.installed_over; x record; roles text := 'guard_worker, guard_keeper, guard_broker';
+GUARD_TRIGGERS = ("!guard_intent", "guard_intent_done", "guard_row", "guard_statement", "guard_truncate")
+_trigger_list = ", ".join(f"'{name}'" for name in GUARD_TRIGGERS)
+
+# Objects outside the guard's schema that depend on something in it (a view over guard.audit, say).
+# DROP SCHEMA ... CASCADE would drop them too, so uninstall refuses while there are any. The guard's own
+# triggers on the protected tables are left out; uninstall drops those first.
+DEPENDENTS_SQL = f"""SELECT string_agg(DISTINCT pg_describe_object(d.classid, d.objid, d.objsubid), '; ')
+FROM pg_depend d
+WHERE ((d.refclassid = 'pg_class'::regclass AND d.refobjid IN (SELECT c.oid FROM pg_class c WHERE c.relnamespace = 'guard'::regnamespace))
+    OR (d.refclassid = 'pg_proc'::regclass AND d.refobjid IN (SELECT p.oid FROM pg_proc p WHERE p.pronamespace = 'guard'::regnamespace))
+    OR (d.refclassid = 'pg_type'::regclass AND d.refobjid IN (SELECT t.oid FROM pg_type t WHERE t.typnamespace = 'guard'::regnamespace)))
+  AND d.deptype NOT IN ('i', 'e')
+  AND CASE d.classid  -- the dependent's schema: its own, or its table's for a trigger, default, rule or policy
+        WHEN 'pg_class'::regclass THEN (SELECT c.relnamespace FROM pg_class c WHERE c.oid = d.objid)
+        WHEN 'pg_proc'::regclass THEN (SELECT p.pronamespace FROM pg_proc p WHERE p.oid = d.objid)
+        WHEN 'pg_type'::regclass THEN (SELECT t.typnamespace FROM pg_type t WHERE t.oid = d.objid)
+        WHEN 'pg_constraint'::regclass THEN (SELECT c.connamespace FROM pg_constraint c WHERE c.oid = d.objid)
+        WHEN 'pg_attrdef'::regclass THEN (SELECT c.relnamespace FROM pg_attrdef a JOIN pg_class c ON c.oid = a.adrelid WHERE a.oid = d.objid)
+        WHEN 'pg_trigger'::regclass THEN (SELECT c.relnamespace FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE t.oid = d.objid)
+        WHEN 'pg_rewrite'::regclass THEN (SELECT c.relnamespace FROM pg_rewrite r JOIN pg_class c ON c.oid = r.ev_class WHERE r.oid = d.objid)
+        WHEN 'pg_policy'::regclass THEN (SELECT c.relnamespace FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid WHERE p.oid = d.objid)
+      END IS DISTINCT FROM 'guard'::regnamespace
+  AND NOT (d.classid = 'pg_trigger'::regclass AND d.objid IN (
+    SELECT t.oid FROM pg_trigger t JOIN guard.guarded g ON g.target = t.tgrelid WHERE t.tgname IN ({_trigger_list})))"""
+
+# Inside one transaction: the guard's triggers off the protected tables that still exist, every grant
+# to the three roles in this database taken back (pg_shdepend lists them all, columns, procedures,
+# types and large objects included; CASCADE takes the CONNECT the broker gave each agent login with
+# it), PUBLIC's rights put back as guard.installed_over recorded them, and the guard's schema dropped.
+UNINSTALL_SQL = f"""DO $uninstall$
+DECLARE was guard.installed_over; x record; o record; kind text; outside text;
+  roles text := 'guard_worker, guard_keeper, guard_broker';
+  role_oids oid[] := ARRAY['guard_worker'::regrole, 'guard_keeper'::regrole, 'guard_broker'::regrole]::oid[];
 BEGIN
   SELECT * INTO was FROM guard.installed_over;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'guard.installed_over is empty, so what install changed is unknown; nothing was changed';
   END IF;
-  FOR x IN SELECT target FROM guard.guarded LOOP
-    EXECUTE format('DROP TRIGGER IF EXISTS %I ON %s', '!guard_intent', x.target);
-    EXECUTE format('DROP TRIGGER IF EXISTS guard_statement ON %s', x.target);
-    EXECUTE format('DROP TRIGGER IF EXISTS guard_truncate ON %s', x.target);
-    EXECUTE format('DROP TRIGGER IF EXISTS guard_row ON %s', x.target);
+  outside := ({DEPENDENTS_SQL});
+  IF outside IS NOT NULL THEN
+    RAISE EXCEPTION 'Objects outside the guard depend on it: %; nothing was changed', outside;
+  END IF;
+  FOR x IN SELECT c.oid::regclass AS target FROM guard.guarded g JOIN pg_class c ON c.oid = g.target LOOP
+    FOREACH kind IN ARRAY ARRAY[{_trigger_list}] LOOP
+      EXECUTE format('DROP TRIGGER IF EXISTS %I ON %s', kind, x.target);
+    END LOOP;
   END LOOP;
-  FOR x IN SELECT DISTINCT c.oid::regclass AS name, c.relkind FROM pg_class c, aclexplode(c.relacl) a
-           WHERE a.grantee IN ('guard_worker'::regrole, 'guard_keeper'::regrole, 'guard_broker'::regrole)
-             AND c.relnamespace <> 'guard'::regnamespace LOOP
-    EXECUTE format('REVOKE ALL ON %s %s FROM %s CASCADE', CASE WHEN x.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END, x.name, roles);
+  FOR x IN SELECT DISTINCT s.classid, s.objid, CASE WHEN s.classid = 'pg_class'::regclass THEN 0 ELSE s.objsubid END AS objsubid
+           FROM pg_shdepend s
+           WHERE s.dbid = (SELECT d.oid FROM pg_database d WHERE d.datname = current_database())
+             AND s.refclassid = 'pg_authid'::regclass AND s.refobjid = ANY(role_oids) AND s.deptype = 'a'
+             AND s.classid <> 'pg_default_acl'::regclass LOOP
+    o := pg_identify_object(x.classid, x.objid, x.objsubid);
+    CONTINUE WHEN o.schema = 'guard' OR (o.type = 'schema' AND o.identity = 'guard');
+    kind := CASE WHEN o.type IN ('table', 'view', 'materialized view', 'foreign table') THEN 'TABLE'
+                 WHEN o.type = 'sequence' THEN 'SEQUENCE'
+                 WHEN o.type IN ('function', 'procedure', 'aggregate') THEN 'ROUTINE'
+                 WHEN o.type = 'schema' THEN 'SCHEMA'
+                 WHEN o.type = 'type' THEN 'TYPE'
+                 WHEN o.type = 'language' THEN 'LANGUAGE'
+                 WHEN o.type = 'foreign-data wrapper' THEN 'FOREIGN DATA WRAPPER'
+                 WHEN o.type = 'server' THEN 'FOREIGN SERVER'
+                 WHEN o.type = 'large object' THEN 'LARGE OBJECT' END;
+    IF kind IS NULL THEN
+      RAISE EXCEPTION 'A guard role holds rights on % %, which uninstall cannot take back; nothing was changed', o.type, o.identity;
+    END IF;
+    EXECUTE format('REVOKE ALL ON %s %s FROM %s CASCADE', kind, o.identity, roles);
   END LOOP;
-  FOR x IN SELECT DISTINCT p.oid::regprocedure AS name FROM pg_proc p, aclexplode(p.proacl) a
-           WHERE a.grantee IN ('guard_worker'::regrole, 'guard_keeper'::regrole, 'guard_broker'::regrole)
-             AND p.pronamespace <> 'guard'::regnamespace LOOP
-    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %s CASCADE', x.name, roles);
-  END LOOP;
-  FOR x IN SELECT DISTINCT n.nspname FROM pg_namespace n, aclexplode(n.nspacl) a
-           WHERE a.grantee IN ('guard_worker'::regrole, 'guard_keeper'::regrole, 'guard_broker'::regrole) AND n.nspname <> 'guard' LOOP
-    EXECUTE format('REVOKE ALL ON SCHEMA %I FROM %s CASCADE', x.nspname, roles);
+  FOR x IN SELECT DISTINCT d.defaclrole, d.defaclnamespace, d.defaclobjtype FROM pg_default_acl d, aclexplode(d.defaclacl) a
+           WHERE a.grantee = ANY(role_oids) AND d.defaclnamespace <> 'guard'::regnamespace LOOP
+    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %s%s REVOKE ALL ON %s FROM %s CASCADE', x.defaclrole::regrole,
+      CASE WHEN x.defaclnamespace = 0 THEN '' ELSE format(' IN SCHEMA %I', (SELECT n.nspname FROM pg_namespace n WHERE n.oid = x.defaclnamespace)) END,
+      CASE x.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES' WHEN 'f' THEN 'FUNCTIONS' WHEN 'T' THEN 'TYPES' ELSE 'SCHEMAS' END,
+      roles);
   END LOOP;
   EXECUTE format('REVOKE ALL ON DATABASE %I FROM %s CASCADE', current_database(), roles);
   IF was.public_connect THEN EXECUTE format('GRANT CONNECT ON DATABASE %I TO PUBLIC', current_database()); END IF;
@@ -111,7 +165,35 @@ BEGIN
   END IF;
 END $uninstall$;
 DROP SCHEMA guard CASCADE;
-COMMIT;"""
+"""
+
+
+def literal(name):
+    return "'" + name.replace("'", "''") + "'"
+
+
+def identifier(name):
+    return '"' + name.replace('"', '""') + '"'
+
+
+def save_audit(owner, database, folder):
+    """Stream the audit log, undo records and budgets to a new JSON file in folder; returns its path."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = owner.sql("SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYYMMDD-HH24MISS-US');", database)
+    final = folder / f"{database}-guard-audit-{stamp}Z.json"
+    partial = final.with_suffix(".partial")
+    script = (f'SET ROLE "{owner.role}";\n' if owner.role else "") + AUDIT_EXPORT
+    try:
+        with partial.open("xb") as out:
+            done = subprocess.run(owner.client_args(database), input=script.encode("utf-8"), stdout=out,
+                                  stderr=subprocess.PIPE, env=owner.env, timeout=3600, creationflags=FLAGS)
+        if done.returncode:
+            raise RuntimeError("Saving the audit log failed: " + done.stderr.decode("utf-8", "replace")[-1000:])
+        partial.rename(final)
+    finally:
+        partial.unlink(missing_ok=True)
+    return final
 
 
 def uninstall(owner, database, audit_to, drop_roles=False):
@@ -119,48 +201,51 @@ def uninstall(owner, database, audit_to, drop_roles=False):
 
     Agents are stopped first and the audit log is saved to a file in audit_to, because it is the only
     record of what they did. With drop_roles, the three roles and the logins the broker issued are
-    dropped too, which is refused before anything changes while another database still has the guard.
+    dropped too, which is refused before anything changes while they are used in another database.
+    All of it is one transaction: if any part fails, the guard stays (frozen) and nothing else changes.
     Data the agents changed stays as it is: undo first for anything that should go back.
     """
     database_name(database)
     if owner.sql("SELECT to_regnamespace('guard') IS NOT NULL;", database) != "t":
         raise ValueError(f"The guard is not installed in {database}")
-    if drop_roles:
-        others = [name for name in owner.sql("SELECT coalesce(string_agg(datname, ' '), '') FROM pg_database "
-                                             "WHERE datallowconn AND datname <> current_database();", database).split()
-                  if owner.sql("SELECT to_regnamespace('guard') IS NOT NULL;", name) == "t"]
-        if others:
-            raise ValueError("The guard is still installed in " + ", ".join(others) +
-                             "; its roles are shared there, so nothing was changed")
+    outside = owner.sql(f"SELECT coalesce(({DEPENDENTS_SQL}), '');", database)
+    if outside:
+        raise ValueError(f"Objects outside the guard depend on it, and dropping its schema would drop them too: {outside}. "
+                         "Nothing was changed")
     # The logins the broker issued: direct members of guard_worker that can log in.
     issued = owner.sql("""SELECT coalesce(string_agg(r.rolname, ' ' ORDER BY r.rolname), '') FROM pg_auth_members m
       JOIN pg_roles r ON r.oid = m.member WHERE m.roleid = 'guard_worker'::regrole AND r.rolcanlogin;""", database).split()
+    names = issued + ["guard_broker", "guard_keeper", "guard_worker"]
+    listed = "ARRAY[" + ",".join(literal(name) for name in names) + "]::name[]"
+    if drop_roles:
+        # Roles belong to the whole server: whatever another database still grants them or lets them
+        # own (the guard installed there, for one) would stop DROP ROLE, so it is refused up front.
+        elsewhere = owner.sql(f"""SELECT coalesce(string_agg(DISTINCT d.datname::text, ', ' ORDER BY d.datname::text), '')
+          FROM pg_shdepend s JOIN pg_database d ON d.oid = s.dbid
+          WHERE s.refclassid = 'pg_authid'::regclass AND d.datname <> current_database()
+            AND s.refobjid IN (SELECT r.oid FROM pg_roles r WHERE r.rolname = ANY({listed}));""", database)
+        if elsewhere:
+            raise ValueError(f"The guard's roles are still used in {elsewhere} (the guard is installed there, or something "
+                             "there was granted to them), and roles are shared by every database; nothing was changed")
     end = ("SELECT count(pg_terminate_backend(a.pid)) FROM pg_stat_activity a WHERE a.datname = current_database() "
            "AND a.usesysid IN (SELECT guard.agent_logins());")
     owner.sql("SELECT guard.freeze('the guard is being uninstalled');", database)
     owner.sql(end, database)
-    record = owner.sql(AUDIT_SQL, database)
-    saved = json.loads(record)
-    folder = Path(audit_to)
-    folder.mkdir(parents=True, exist_ok=True)
-    stamp = owner.sql("SELECT to_char(clock_timestamp(),'YYYYMMDD-HH24MISS');", database)
-    path = folder / f"{database}-guard-audit-{stamp}.json"
-    with path.open("xb") as out:
-        out.write(record.encode("utf-8"))
-    owner.sql(UNINSTALL_SQL, database)
-    literal = lambda name: "'" + name.replace("'", "''") + "'"
-    identifier = lambda name: '"' + name.replace('"', '""') + '"'
-    if issued:
-        owner.sql("SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE datname = current_database() "
-                  "AND usename = ANY(ARRAY[" + ",".join(literal(name) for name in issued) + "]::name[]);", database)
-    result = dict(database=database, audit_file=str(path), audit_rows=len(saved["audit"]), logins_cut_off=issued,
-                  roles_dropped=[])
+    rows = int(owner.sql("SELECT count(*) FROM guard.audit;", database))
+    path = save_audit(owner, database, audit_to)
+    # A busy protected table fails fast rather than queue the application's statements behind DROP TRIGGER.
+    script = "BEGIN;\nSET LOCAL lock_timeout = '2s';\n" + UNINSTALL_SQL
     if drop_roles:
-        names = issued + ["guard_broker", "guard_keeper", "guard_worker"]
-        owner.sql("REVOKE SET ON PARAMETER temp_file_limit, log_statement FROM guard_broker;\n" +
-                  "".join(f"DROP ROLE {identifier(name)};\n" for name in names), database)
-        result["roles_dropped"] = names
-    return result
+        script += (f"SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename = ANY({listed});\n"
+                   "REVOKE SET ON PARAMETER temp_file_limit, log_statement FROM guard_broker;\n"
+                   f"DROP OWNED BY {', '.join(identifier(name) for name in names)};\n"
+                   + "".join(f"DROP ROLE {identifier(name)};\n" for name in names))
+    owner.sql(script + "COMMIT;", database)
+    if issued and not drop_roles:
+        owner.sql("SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE datname = current_database() "
+                  f"AND usename = ANY(ARRAY[{','.join(literal(name) for name in issued)}]::name[]);", database)
+    return dict(database=database, audit_file=str(path), audit_rows=rows, logins_cut_off=issued,
+                roles_dropped=names if drop_roles else [])
 
 
 def issue_login(broker, database, rows, size, hours, connections=4, temp_file_limit="100MB", prefix="agent",
@@ -302,19 +387,21 @@ def backup(args):
     scratch = "agentdb_test_restore_" + secrets.token_hex(5)
     owner.create_database(scratch)
     try:
+        # Closed before anything is restored into it: a dump holds no database-level privileges, and a new
+        # database lets PUBLIC connect, so every login on the server could otherwise reach the copy.
+        owner.sql(f'REVOKE CONNECT, TEMPORARY ON DATABASE "{scratch}" FROM PUBLIC;', settings["maintenance_database"])
         with partial.open("rb") as dump:
             done = subprocess.run(tool("pg_restore", "--exit-on-error", "-d", scratch), stdin=dump, stderr=subprocess.PIPE,
                                   stdout=subprocess.PIPE, env=owner.env, timeout=3600, creationflags=FLAGS)
         if done.returncode:
             raise RuntimeError("pg_restore failed: " + done.stderr.decode("utf-8", "replace")[-1000:])
-        # A dump holds no database-level privileges, so the scratch database gets the ones install sets.
-        owner.sql(f'REVOKE CONNECT, TEMPORARY ON DATABASE "{scratch}" FROM PUBLIC;', scratch)
         same = owner.sql("SELECT guard.fingerprint() = (SELECT fingerprint FROM guard.gate);", scratch)
         problems = json.loads(owner.sql("SELECT guard.boundary_problems();", scratch))
         if same != "t" or problems != []:
             raise RuntimeError(f"The restored guard is not intact: fingerprint matches {same}, problems {problems}")
         tables = {}
-        for line in owner.sql("SELECT string_agg(target::text, E'\\n') FROM guard.guarded;", scratch).splitlines():
+        for line in owner.sql("SELECT string_agg(c.oid::regclass::text, E'\\n') FROM guard.guarded g "
+                              "JOIN pg_class c ON c.oid = g.target;", scratch).splitlines():
             tables[line] = int(owner.sql(f"SELECT count(*) FROM {line};", scratch))
         tables["guard.audit"] = int(owner.sql("SELECT count(*) FROM guard.audit;", scratch))
     finally:
@@ -379,6 +466,10 @@ def main():
     args = parser.parse_args()
     if not args.database:  # never fall back to whatever database a shared config names
         parser.exit(2, "Name the database with --database.\n")
+    if args.password:
+        # Asked once, here: every connection reuses it. Otherwise each one would ask again, and under run the
+        # keeper's thread would ask while the agent's command is already reading the same terminal.
+        args.password_value, args.password = getpass.getpass("PostgreSQL password (not saved): "), False
     try:
         if args.action == "install":
             owner = connect(args, None)

@@ -25,6 +25,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+import check_sandbox  # noqa: E402
 import guard as gb  # noqa: E402
 from guard import BROKER, KEEPER, WORKER, issue_login, keeper_round, retire_login, scram_verifier, undo_login  # noqa: E402
 from db import FLAGS, Connection, sqlstate  # noqa: E402
@@ -631,6 +632,7 @@ class Attacks:
         a_name, database = self.a_name, self.database
         trigger = lambda table, name: self.owner.sql(f"SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgrelid='{table}'::regclass AND tgname='{name}';")
         guard_row, intent, at_commit = trigger("shop.products", "guard_row"), trigger("shop.products", "!guard_intent"), trigger("guard.commit_check", "at_commit")
+        intent_done = trigger("shop.products", "guard_intent_done")
         function = self.owner.sql("SELECT pg_get_functiondef('guard.status()'::regprocedure);")
         restock = self.owner.sql("SELECT pg_get_functiondef('shop.restock(bigint,integer)'::regprocedure);")
         mid = "guard_atk_mid_" + secrets.token_hex(4)
@@ -639,10 +641,18 @@ class Attacks:
              "disabled trigger shop.products.guard_row"),
             ("guard_trigger_dropped", "DROP TRIGGER guard_row ON shop.products;", guard_row + ";", "guarded table without trigger guard_row: shop.products"),
             ("intent_trigger_dropped", 'DROP TRIGGER "!guard_intent" ON shop.products;', intent + ";", "guarded table without trigger !guard_intent: shop.products"),
+            ("intent_cleanup_trigger_dropped", "DROP TRIGGER guard_intent_done ON shop.products;", intent_done + ";",
+             "guarded table without trigger guard_intent_done: shop.products"),
             ("audit_left_editable", "ALTER TABLE guard.audit DISABLE TRIGGER immutable;", "ALTER TABLE guard.audit ENABLE TRIGGER immutable;",
              "disabled trigger guard.audit.immutable"),
             ("commit_check_dropped", "DROP TRIGGER at_commit ON guard.commit_check;", at_commit + ";", "guard table without trigger guard.commit_check.at_commit"),
             ("write_grant_added", f"GRANT UPDATE ON shop.app_log TO {WORKER};", f"REVOKE UPDATE ON shop.app_log FROM {WORKER};", f"{WORKER} may change shop.app_log"),
+            ("column_write_grant_added", "GRANT UPDATE (line) ON shop.app_log TO PUBLIC;", "REVOKE UPDATE (line) ON shop.app_log FROM PUBLIC;",
+             f"{WORKER} may change shop.app_log"),
+            ("sequence_setval_granted", "GRANT UPDATE ON SEQUENCE shop.app_log_id_seq TO PUBLIC;", "REVOKE UPDATE ON SEQUENCE shop.app_log_id_seq FROM PUBLIC;",
+             f"{WORKER} may set sequence shop.app_log_id_seq"),
+            ("guard_column_read_grant_added", f"GRANT SELECT (login) ON guard.budget TO {WORKER};", f"REVOKE SELECT (login) ON guard.budget FROM {WORKER};",
+             f"{WORKER} may read guard.budget"),
             ("function_grant_added", f"GRANT EXECUTE ON FUNCTION guard.undo(name) TO {WORKER};", f"REVOKE EXECUTE ON FUNCTION guard.undo(name) FROM {WORKER};",
              f"{WORKER} may execute guard.undo(name)"),
             ("guard_read_grant_added", f"GRANT SELECT ON guard.budget TO {WORKER};", f"REVOKE SELECT ON guard.budget FROM {WORKER};", f"{WORKER} may read guard.budget"),
@@ -722,8 +732,10 @@ class Attacks:
         round_ = keeper_round(self.keeper, self.database)
         self.owner.sql("REVOKE " + grant.format("FROM"))
         self.record("freeze", "keepers_round_freezes_on_a_problem", bool(round_["frozen"]) and "guard.undo" in round_["frozen"], round_["frozen"] or "NOT FROZEN")
-        ended = {(item["login"], item["reason"]) for item in round_["ended"]}
-        self.record("freeze", "keepers_round_ends_transactions_already_past_the_gate", (b_name, "writing while frozen") in ended, str(round_["ended"]))
+        # The freeze itself ends them: the transaction past its commit check holds the gate's row.
+        writing = self.owner.sql(f"SELECT count(*) FROM pg_stat_activity WHERE usename='{b_name}' AND backend_xid IS NOT NULL;")
+        self.record("freeze", "the_freeze_ends_transactions_already_past_the_gate", writing == "0",
+                    f"{writing} still writing; the round's own list: {round_['ended']}")
         self.ask(past, "COMMIT;")
         self.close(past)
         self.close(begun)
@@ -845,6 +857,19 @@ class Attacks:
                 ("a_definer_function_in_a_loop", "DO $$ BEGIN FOR i IN 2001..2600 LOOP PERFORM shop.restock(i, 1); END LOOP; END $$;")):
             self.refused("review", label + "_is_counted", writer, statement, ("AB007",))
         self.record("review", "none_of_that_changed_the_tables", self.state() == before, "tables the same")
+        # A BEFORE trigger of the application's that skips a row keeps guard.charge from seeing it.
+        self.owner.sql("CREATE TRIGGER z_atk_min_update BEFORE UPDATE ON shop.settings FOR EACH ROW "
+                       "EXECUTE FUNCTION suppress_redundant_updates_trigger();")
+        try:
+            skipper, _ = self.issue()
+            intents, rows_left = self.owner.sql("SELECT count(*) FROM guard.intent;"), self.budget(skipper)[0]
+            result = skipper.execute("UPDATE shop.settings SET value = value; UPDATE shop.settings SET value = value;", self.database)
+            after = self.owner.sql("SELECT count(*) FROM guard.intent;")
+            self.record("review", "rows_the_application_skips_leave_no_intent_behind",
+                        result.returncode == 0 and after == intents and self.budget(skipper)[0] == rows_left,
+                        f"intents {intents} -> {after}; exit {result.returncode} {result.stderr.strip()[:160]}")
+        finally:
+            self.owner.sql("DROP TRIGGER z_atk_min_update ON shop.settings;")
         result = self.a.execute("SELECT count(nextval('shop.orders_id_seq')) FROM generate_series(1,1000);", self.database)
         self.record("review", "an_agent_can_burn_sequence_values", None,
                     ("accepted: inserts need USAGE on the sequence, which allows nextval; a 4-byte sequence could be run out "
@@ -909,7 +934,15 @@ sys.exit(0 if answer != b'alive' else 3)
         self.record("cli", "report_says_what_a_login_changed", report.get("changes") == 1 and report.get("undone") == 1, f"exit {told.returncode}; {report.get('tables')}")
 
         worker, _ = self.issue()
-        stopped = tool("freeze", "code freeze: it's release day")
+        holder, _ = self.issue()
+        row = self.rows(1)[0]
+        price = self.price(row)
+        past = self.hold(holder, f"BEGIN; {self.update([row])} SET CONSTRAINTS ALL IMMEDIATE; SELECT 'past the commit check';")
+        past.stdout.readline()
+        stopped = tool("freeze", "code freeze: it's release day")  # no keeper round runs here
+        self.ask(past, "COMMIT;")
+        self.close(past)
+        self.record("cli", "freeze_ends_a_write_already_past_the_commit_check", self.price(row) == price, f"price {price} -> {self.price(row)}")
         state = sqlstate(worker.execute(self.update(self.rows(1)), self.database).stderr)
         status = tool("status")
         reason = json.loads(status.stdout)["frozen"] if status.returncode == 0 else None
@@ -967,6 +1000,9 @@ sys.exit(0 if answer != b'alive' else 3)
         gaps = json.loads(here.stdout.strip().splitlines()[-1])["gaps"]
         wsl = bool(self.owner.settings["wsl_distribution"])
         self.record("sandbox", "this_machines_own_route_to_superuser_is_found", ("cannot_run_wsl" in gaps) if wsl else None, f"exit {here.returncode}, gaps: {gaps}")
+        probe = self.a.execute(check_sandbox.PROBE + ";", self.database)
+        self.record("sandbox", "the_sandbox_checks_own_login_query_works_for_an_agent",
+                    probe.returncode == 0 and "superuser=off" in probe.stdout, (probe.stdout.strip() or probe.stderr.strip())[:200])
         self.record("sandbox", "real_container", None, "not run: the container check is Forkpoint's and unchanged")
 
     def clean_up(self):

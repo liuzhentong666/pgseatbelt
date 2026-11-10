@@ -43,12 +43,26 @@ SELECT coalesce(json_agg(line ORDER BY line), '[]') FROM (
      OR p.oid IN ('pg_catalog.lo_create(oid)'::regprocedure, 'pg_catalog.lo_creat(integer)'::regprocedure,
                   'pg_catalog.lo_from_bytea(oid,bytea)'::regprocedure)
   UNION ALL
+  SELECT 'column ' || c.oid::regclass::text || '.' || t.attname || ': ' || {WHO} FROM pg_attribute t JOIN pg_class c ON c.oid = t.attrelid
+  JOIN named n ON n.oid = c.relnamespace CROSS JOIN LATERAL aclexplode(t.attacl) a
+  UNION ALL
+  SELECT 'default ' || d.defaclrole::regrole::text || ' ' || coalesce(s.nspname, '-') || ' ' || d.defaclobjtype::text || ': ' || {WHO}
+  FROM pg_default_acl d LEFT JOIN pg_namespace s ON s.oid = d.defaclnamespace CROSS JOIN LATERAL aclexplode(d.defaclacl) a
+  UNION ALL
   SELECT 'trigger ' || t.tgrelid::regclass::text || ' ' || t.tgname || ' ' || t.tgenabled::text FROM pg_trigger t WHERE NOT t.tgisinternal
   UNION ALL
   SELECT 'schema exists: ' || nspname FROM named
 ) x;"""
 GUARD_ROLES = ("SELECT coalesce(string_agg(rolname, ' ' ORDER BY rolname), '') FROM pg_roles "
                "WHERE rolname IN ('guard_worker', 'guard_keeper', 'guard_broker');")
+# The application's own, before the guard: a table agents may read only some columns of, and a procedure only they may call.
+NOTES_SQL = """CREATE TABLE shop.notes (id bigint PRIMARY KEY, body text, secret text);
+CREATE PROCEDURE shop.touch_note(p_id bigint) LANGUAGE sql AS $$ UPDATE shop.notes SET body = body WHERE id = p_id $$;
+REVOKE EXECUTE ON PROCEDURE shop.touch_note(bigint) FROM PUBLIC;"""
+# Grants an owner may well make to the worker role, each kind of which uninstall has to take back.
+WORKER_GRANTS = """REVOKE SELECT ON shop.notes FROM guard_worker; GRANT SELECT (id, body) ON shop.notes TO guard_worker;
+GRANT EXECUTE ON PROCEDURE shop.touch_note(bigint) TO guard_worker;
+ALTER DEFAULT PRIVILEGES IN SCHEMA shop GRANT SELECT ON TABLES TO guard_worker;"""
 
 
 def connect(database, **login):
@@ -79,7 +93,7 @@ def main():
         owner = connect(database)
         gb.install(owner, database, PROTECTED)
         owner.sql("SELECT guard.allow('shop.restock(bigint,integer)', 'writes only shop.products');"
-                  "GRANT SELECT ON ALL TABLES IN SCHEMA shop TO guard_worker;")
+                  "GRANT SELECT ON ALL TABLES IN SCHEMA shop TO guard_worker;" + WORKER_GRANTS)
         login, password, _ = gb.issue_login(connect(database, role=gb.BROKER), database, 10, 100_000, 1, prefix="guard_atk")
         logins.append(login)
         agent = connect(database, user=login, host="127.0.0.1", password_value=password)
@@ -91,7 +105,7 @@ def main():
         for kind, database in databases.items():
             admin.create_database(database)
             owner = connect(database)
-            owner.sql(SHOP_SQL)
+            owner.sql(SHOP_SQL + NOTES_SQL)
             if kind == "locked":
                 owner.sql(f'REVOKE CONNECT, TEMPORARY ON DATABASE "{database}" FROM PUBLIC;'
                           "REVOKE EXECUTE ON FUNCTION lo_from_bytea(oid,bytea), lo_create(oid), lo_creat(integer) FROM PUBLIC;")
@@ -110,6 +124,19 @@ def main():
         still = connect(a).sql("SELECT to_regnamespace('guard') IS NOT NULL;")
         record("dropping_the_roles_is_refused_while_another_database_has_the_guard",
                refused is not None and b in refused and still == "t", refused or "NOT REFUSED")
+
+        connect(a).sql("CREATE VIEW shop.agent_changes AS SELECT login, at FROM guard.audit;")
+        try:
+            gb.uninstall(connect(a), a, folder)
+            refused = None
+        except ValueError as error:
+            refused = str(error)
+        still = connect(a).sql("SELECT (SELECT frozen_reason IS NULL FROM guard.gate)::text || ' ' || "
+                               "(SELECT count(*) FROM pg_trigger WHERE tgname = 'guard_row');")
+        record("uninstall_refuses_while_something_outside_the_guard_depends_on_it",
+               refused is not None and "agent_changes" in refused and still == f"true {len(PROTECTED)}",
+               f"{refused or 'NOT REFUSED'}; open, triggers: {still}")
+        connect(a).sql("DROP VIEW shop.agent_changes;")
 
         result = gb.uninstall(connect(a), a, folder)
         gone = differences(a)
@@ -130,9 +157,26 @@ def main():
         record("the_roles_stay_for_the_other_database", roles == "guard_broker guard_keeper guard_worker", roles)
 
         use(a)
-        gb.uninstall(connect(a), a, folder)
+        # A table protected and then dropped leaves only its number in guard.guarded.
+        connect(a).sql("CREATE TABLE shop.scratch (id bigint PRIMARY KEY); SELECT guard.protect('shop.scratch'); DROP TABLE shop.scratch;")
+        try:
+            gb.uninstall(connect(a), a, folder)
+            failed = None
+        except (RuntimeError, ValueError) as error:
+            failed = str(error)
+        record("uninstall_works_after_a_protected_table_was_dropped", failed is None, (failed or "uninstalled")[:300])
         gone = differences(a)
         record("install_and_uninstall_again_put_back_the_same", gone == [], gone or "identical")
+
+        # a has no guard now, but something there is granted to a guard role: dropping the roles must not start.
+        connect(a).sql("GRANT SELECT ON shop.products TO guard_worker;")
+        held = subprocess.run([sys.executable, str(ROOT / "guard.py"), "uninstall", "--database", b, "--audit-to", folder, "--drop-roles"],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300, cwd=ROOT, creationflags=FLAGS)
+        still = connect(b).sql("SELECT (to_regnamespace('guard') IS NOT NULL)::text;") + " " + admin.sql(GUARD_ROLES)
+        record("dropping_the_roles_is_refused_while_another_database_grants_them_something",
+               held.returncode == 1 and a in held.stderr and still == "true guard_broker guard_keeper guard_worker",
+               f"exit {held.returncode}; {held.stderr.strip()[:200]}; then: {still}")
+        connect(a).sql("REVOKE SELECT ON shop.products FROM guard_worker;")
 
         cli = subprocess.run([sys.executable, str(ROOT / "guard.py"), "uninstall", "--database", b, "--audit-to", folder, "--drop-roles"],
                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300, cwd=ROOT, creationflags=FLAGS)
