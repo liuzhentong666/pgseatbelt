@@ -3,8 +3,10 @@
 --
 -- Run as a superuser owner of the application's database (re-runnable). Then, as that owner, for
 -- every table agents may write: SELECT guard.protect('<table>'); and grant guard_worker SELECT on
--- whatever agents may read. Rerunning this file accepts the guard's functions as they now are (the
--- fingerprint), but never reopens writes: only the owner's guard.unfreeze() does.
+-- whatever agents may read. guard.unprotect('<schema.table>') takes one out again, and is how the
+-- owner says that a protected table was dropped on purpose. Rerunning this file accepts the guard's
+-- functions as they now are (the fingerprint), but never reopens writes: only the owner's
+-- guard.unfreeze() does.
 --
 -- * Agents are logins the broker issues; each holds guard_worker. They write the live tables
 --   directly. Triggers on each protected table charge the login's budget (rows and bytes, no
@@ -26,6 +28,19 @@
 --   (undo); AB006 not READ COMMITTED; AB007 too large a share of a table, or TRUNCATE.
 -- * guard.py uninstall takes all of this out again and puts back what guard.installed_over recorded.
 BEGIN;
+-- Before anything changes. Installed by a role that is not a superuser, the guard would look whole and
+-- not work: the keeper could end no session and the broker could issue no login.
+DO $preflight$
+BEGIN
+  IF current_setting('server_version_num')::integer < 160000 THEN
+    RAISE EXCEPTION 'The guard needs PostgreSQL 16 or later, and this server is %; nothing was changed', current_setting('server_version');
+  END IF;
+  IF NOT (SELECT r.rolsuper FROM pg_roles r WHERE r.rolname = current_user) THEN
+    RAISE EXCEPTION 'The guard has to be installed by a superuser, and % is not one; nothing was changed', current_user
+      USING ERRCODE = '42501', HINT = 'Its keeper has to end sessions and its broker has to fix settings on the logins it issues, '
+        'and only a superuser can grant either. A managed service that gives out no superuser cannot run it yet.';
+  END IF;
+END $preflight$;
 CREATE SCHEMA IF NOT EXISTS guard;
 REVOKE ALL ON SCHEMA guard FROM PUBLIC;
 -- What install takes from PUBLIC outside the guard's own schema, as it was before the first install,
@@ -54,12 +69,10 @@ BEGIN
            OR (rolcreaterole AND rolname <> 'guard_broker'))) THEN
     RAISE EXCEPTION 'An existing guard role has attributes it must not have; inspect it without changing it silently';
   END IF;
-  IF (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
-    GRANT pg_signal_backend, pg_read_all_stats TO guard_keeper;
-    GRANT guard_worker TO guard_broker WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
-    GRANT SET ON PARAMETER temp_file_limit, log_statement TO guard_broker;
-    REVOKE EXECUTE ON FUNCTION pg_catalog.lo_from_bytea(oid, bytea), pg_catalog.lo_create(oid), pg_catalog.lo_creat(integer) FROM PUBLIC;
-  END IF;
+  GRANT pg_signal_backend, pg_read_all_stats TO guard_keeper;
+  GRANT guard_worker TO guard_broker WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
+  GRANT SET ON PARAMETER temp_file_limit, log_statement TO guard_broker;
+  REVOKE EXECUTE ON FUNCTION pg_catalog.lo_from_bytea(oid, bytea), pg_catalog.lo_create(oid), pg_catalog.lo_creat(integer) FROM PUBLIC;
   EXECUTE format('REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC', current_database());
   EXECUTE format('GRANT CONNECT ON DATABASE %I TO guard_keeper', current_database());
   EXECUTE format('GRANT CONNECT ON DATABASE %I TO guard_broker WITH GRANT OPTION', current_database());
@@ -82,7 +95,10 @@ ALTER TABLE guard.budget ADD COLUMN IF NOT EXISTS struck_from bigint;
 -- size_before: the table's row count when the login first wrote it; the share is measured against it.
 CREATE TABLE IF NOT EXISTS guard.spend(login name NOT NULL, target regclass NOT NULL, size_before bigint NOT NULL,
   changed bigint NOT NULL DEFAULT 0, existing bigint NOT NULL DEFAULT 0, PRIMARY KEY (login, target));
+-- pk_columns: the primary key the table's triggers were built with. name: the table as it was called
+-- when last protected, which is all that names it once it has been dropped.
 CREATE TABLE IF NOT EXISTS guard.guarded(target regclass PRIMARY KEY, pk_columns text[] NOT NULL);
+ALTER TABLE guard.guarded ADD COLUMN IF NOT EXISTS name text;
 -- The columns an agent's UPDATE itself changed, noted before the application's own BEFORE triggers.
 -- guard.charge takes each row's out; guard.intent_done clears what a later BEFORE trigger skipped.
 CREATE TABLE IF NOT EXISTS guard.intent(tx bigint NOT NULL, target regclass NOT NULL, pk jsonb NOT NULL,
@@ -92,6 +108,8 @@ CREATE TABLE IF NOT EXISTS guard.audit(id bigserial PRIMARY KEY, login name NOT 
   tx bigint NOT NULL DEFAULT txid_current(), at timestamptz NOT NULL DEFAULT clock_timestamp(),
   target regclass NOT NULL, op text NOT NULL CHECK (op IN ('I', 'U', 'D')), pk jsonb NOT NULL,
   columns text[], before jsonb, after jsonb);
+-- The table's name when the change was made: target is its oid, which names nothing once it is dropped.
+ALTER TABLE guard.audit ADD COLUMN IF NOT EXISTS target_name text;
 CREATE TABLE IF NOT EXISTS guard.undone(audit_id bigint PRIMARY KEY REFERENCES guard.audit,
   at timestamptz NOT NULL DEFAULT clock_timestamp(), by name NOT NULL DEFAULT session_user);
 -- SECURITY DEFINER functions agents may call, after the owner has read them (guard.allow): they run
@@ -311,8 +329,8 @@ BEGIN
         'larger max_table_share has to do it, which is decided before it starts; or the database owner can.');
     END IF;
   END IF;
-  INSERT INTO guard.audit(login, target, op, pk, columns, before, after)
-  VALUES (session_user, TG_RELID, left(TG_OP, 1), key, cols, o, n);
+  INSERT INTO guard.audit(login, target, target_name, op, pk, columns, before, after)
+  VALUES (session_user, TG_RELID, format('%I.%I', TG_TABLE_SCHEMA, TG_TABLE_NAME), left(TG_OP, 1), key, cols, o, n);
   INSERT INTO guard.commit_check VALUES (txid_current()) ON CONFLICT DO NOTHING;
   RETURN NULL;
 END $$;
@@ -337,19 +355,48 @@ DROP TRIGGER IF EXISTS at_commit ON guard.commit_check;
 CREATE CONSTRAINT TRIGGER at_commit AFTER INSERT ON guard.commit_check DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION guard.at_commit();
 
--- The owner protects a table: triggers, and guard_worker's grants on it and its sequences. A trigger
--- needs a lock that stops the application's writes, and a wait for one queues them too, so a busy
--- table fails fast instead (rerun it).
-CREATE OR REPLACE FUNCTION guard.protect(p_table regclass) RETURNS void LANGUAGE plpgsql
-SET search_path = pg_catalog, guard, pg_temp SET lock_timeout = '2s' AS $$
-DECLARE keys text[]; args text; seq record;
-BEGIN
-  SELECT array_agg(a.attname::text ORDER BY k.ord) INTO keys
+-- A table's primary key columns in key order, or NULL without one.
+CREATE OR REPLACE FUNCTION guard.primary_key(p_table regclass) RETURNS text[] LANGUAGE sql STABLE
+SET search_path = pg_catalog, guard, pg_temp AS $$
+  SELECT array_agg(a.attname::text ORDER BY k.ord)
   FROM pg_index i CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
   JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
-  WHERE i.indrelid = p_table AND i.indisprimary;
-  IF keys IS NULL THEN RAISE EXCEPTION 'A primary key is required: %', p_table; END IF;
-  INSERT INTO guard.guarded VALUES (p_table, keys) ON CONFLICT (target) DO NOTHING;
+  WHERE i.indrelid = p_table AND i.indisprimary
+$$;
+
+-- Why the guard cannot protect a table, or NULL when it can (and for a table that does not exist).
+-- Only an ordinary table with a primary key and no children: on a partitioned table the row triggers
+-- fire on each partition, so the share is measured by partition and undo finds no key; and a write
+-- through a table that others inherit from reaches their rows without firing its row triggers at all.
+CREATE OR REPLACE FUNCTION guard.unsupported(p_table regclass) RETURNS text LANGUAGE sql STABLE
+SET search_path = pg_catalog, guard, pg_temp AS $$
+  SELECT CASE
+    WHEN c.relkind = 'p' THEN 'it is partitioned'
+    WHEN c.relkind <> 'r' THEN 'it is not an ordinary table'
+    WHEN c.relispartition THEN 'it is a partition'
+    WHEN EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhparent = c.oid) THEN 'other tables inherit from it'
+    WHEN guard.primary_key(c.oid) IS NULL THEN 'it has no primary key'
+  END FROM pg_class c WHERE c.oid = p_table
+$$;
+
+-- A table as a person knows it: its name now, or the name recorded for it once it has been dropped.
+CREATE OR REPLACE FUNCTION guard.table_name(p_table regclass, p_recorded text) RETURNS text LANGUAGE sql STABLE
+SET search_path = pg_catalog, guard, pg_temp AS $$
+  SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = p_table) THEN p_table::text
+              ELSE coalesce(p_recorded, p_table::text) || ' (dropped)' END
+$$;
+
+-- The owner protects a table: triggers, and guard_worker's grants on it and its sequences. A trigger
+-- needs a lock that stops the application's writes, and a wait for one queues them too, so a busy
+-- table fails fast instead (rerun it). Protecting a table again brings its triggers, and the key they
+-- use, up to the table as it now is.
+CREATE OR REPLACE FUNCTION guard.protect(p_table regclass) RETURNS void LANGUAGE plpgsql
+SET search_path = pg_catalog, guard, pg_temp SET lock_timeout = '2s' AS $$
+DECLARE keys text[] := guard.primary_key(p_table); args text; seq record; reason text := guard.unsupported(p_table);
+BEGIN
+  IF reason IS NOT NULL THEN RAISE EXCEPTION '% cannot be protected: %', p_table, reason USING ERRCODE = '0A000'; END IF;
+  INSERT INTO guard.guarded(target, pk_columns, name) VALUES (p_table, keys, p_table::text)
+  ON CONFLICT (target) DO UPDATE SET pk_columns = EXCLUDED.pk_columns, name = EXCLUDED.name;
   args := (SELECT string_agg(quote_literal(k), ',') FROM unnest(keys) k);
   -- Triggers of one kind fire in name order; '!' sorts before letters and digits.
   EXECUTE format('CREATE OR REPLACE TRIGGER %I BEFORE UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION guard.intent(%s)', '!guard_intent', p_table, args);
@@ -365,6 +412,38 @@ BEGIN
     EXECUTE format('GRANT USAGE ON SEQUENCE %s TO guard_worker', seq.s);
   END LOOP;
   UPDATE guard.gate SET fingerprint = guard.fingerprint();  -- the owner accepts the new triggers
+END $$;
+
+-- The owner takes a table out again: the guard's triggers go, and so does everything guard_worker was
+-- granted on the table and its sequences, reading included, so agents can no longer write it (grant
+-- SELECT again for what they may still read). Its audit rows stay, and undo still puts them back. A
+-- protected table that was dropped stays a problem until the owner says here that it was meant: give
+-- the name the problem gives. Like guard.protect, this never reopens writes.
+CREATE OR REPLACE FUNCTION guard.unprotect(p_table text) RETURNS void LANGUAGE plpgsql
+SET search_path = pg_catalog, guard, pg_temp SET lock_timeout = '2s' AS $$
+DECLARE g guard.guarded; trig text; seq record; taken integer := 0;
+BEGIN
+  FOR g IN SELECT x.* FROM guard.guarded x
+           WHERE x.target = to_regclass(p_table)
+              OR (x.name = p_table AND NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = x.target)) LOOP
+    IF EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = g.target) THEN
+      FOREACH trig IN ARRAY ARRAY['!guard_intent', 'guard_intent_done', 'guard_statement', 'guard_truncate', 'guard_row'] LOOP
+        EXECUTE format('DROP TRIGGER IF EXISTS %I ON %s', trig, g.target);
+      END LOOP;
+      EXECUTE format('REVOKE ALL ON %s FROM guard_worker', g.target);
+      FOR seq IN SELECT d.objid::regclass AS s FROM pg_depend d JOIN pg_class c ON c.oid = d.objid AND c.relkind = 'S'
+                 WHERE d.refobjid = g.target AND d.deptype IN ('a', 'i') LOOP
+        EXECUTE format('REVOKE ALL ON SEQUENCE %s FROM guard_worker', seq.s);
+      END LOOP;
+    END IF;
+    DELETE FROM guard.guarded x WHERE x.target = g.target;
+    taken := taken + 1;
+  END LOOP;
+  IF taken = 0 THEN
+    RAISE EXCEPTION 'Not a protected table: %', p_table USING ERRCODE = '42P01',
+      HINT = 'Give its name with its schema, as SELECT name FROM guard.guarded lists it.';
+  END IF;
+  UPDATE guard.gate SET fingerprint = guard.fingerprint();  -- the owner accepts that its triggers are gone
 END $$;
 
 -- For the owner, after reading the function: agents may call it although it runs as its owner.
@@ -431,25 +510,46 @@ SET search_path = pg_catalog, guard, pg_temp AS $$
   UPDATE guard.gate SET frozen_reason = NULL, frozen_by = NULL, frozen_at = NULL WHERE frozen_reason IS NOT NULL
 $$;
 
+-- Every login the broker issued keeps its budget row, retired or not. Asking about a name that has
+-- none is a mistake in the name, and an empty answer would read as "this login changed nothing".
+CREATE OR REPLACE FUNCTION guard.known_login(p_login name) RETURNS void LANGUAGE plpgsql STABLE
+SET search_path = pg_catalog, guard, pg_temp AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM guard.budget b WHERE b.login = p_login) THEN
+    RAISE EXCEPTION 'No login named % was ever issued in this database', p_login USING ERRCODE = '42704';
+  END IF;
+END $$;
+
 -- Undo a login's changes newest first, checking and putting back only the columns it changed. Stops
 -- at the first change something newer has touched, and says which: undoing older ones around it
 -- would leave a state nobody had. A rerun picks up where this stopped. With p_from, only that change
 -- and the login's later ones are undone, and its older ones are kept: p_from is the "from" of a
 -- transaction in guard.timeline, or the login's struck_from, the state before its first strike.
+-- The key of each row is the one its audit row recorded, so a table taken out of the guard since can
+-- still be undone; a table whose primary key is no longer that key stops it (AB005), since the old
+-- key may now name several rows. Changes to a table that has been dropped are passed over and
+-- counted in dropped_tables: nothing is left there to put back, or to keep consistent.
 DROP FUNCTION IF EXISTS guard.undo(name);  -- as it was before p_from
 CREATE OR REPLACE FUNCTION guard.undo(p_login name, p_from bigint DEFAULT NULL) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, guard, pg_temp SET TimeZone = 'UTC' SET IntervalStyle = 'postgres'
 SET extra_float_digits = 1 SET bytea_output = 'hex' SET lc_monetary = 'C' AS $$
 DECLARE a guard.audit; keys text[]; doc jsonb; now_doc jsonb; key_where text; set_list text; n integer := 0; refused jsonb;
+  dropped jsonb := '{}'; gone text;
 BEGIN
+  PERFORM guard.known_login(p_login);
   FOR a IN SELECT x.* FROM guard.audit x WHERE x.login = p_login AND x.id >= coalesce(p_from, 0)
              AND NOT EXISTS (SELECT 1 FROM guard.undone u WHERE u.audit_id = x.id) ORDER BY x.id DESC LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = a.target) THEN
-      refused := jsonb_build_object('code', 'AB005', 'message', 'The table this login changed has been dropped since',
-        'table', a.target::text, 'key', a.pk, 'audit_id', a.id);
+      gone := coalesce(a.target_name, a.target::text);
+      dropped := dropped || jsonb_build_object(gone, coalesce((dropped ->> gone)::bigint, 0) + 1);
+      CONTINUE;
+    END IF;
+    keys := ARRAY(SELECT k FROM jsonb_object_keys(a.pk) k ORDER BY k);
+    IF keys IS DISTINCT FROM ARRAY(SELECT k FROM unnest(guard.primary_key(a.target)) k ORDER BY k) THEN
+      refused := jsonb_build_object('code', 'AB005', 'message', 'The table''s primary key has changed since this login changed it',
+        'table', a.target::text, 'key', a.pk, 'audit_id', a.id, 'primary_key_now', to_jsonb(guard.primary_key(a.target)));
       EXIT;
     END IF;
-    SELECT g.pk_columns INTO keys FROM guard.guarded g WHERE g.target = a.target;
     doc := coalesce(a.after, a.before);
     key_where := (SELECT string_agg(format('t.%I = (jsonb_populate_record(NULL::%s, %L::jsonb)).%I', k, a.target, doc, k), ' AND ')
                   FROM unnest(keys) k);
@@ -473,9 +573,10 @@ BEGIN
     INSERT INTO guard.undone(audit_id) VALUES (a.id);
     n := n + 1;
   END LOOP;
-  RETURN jsonb_build_object('login', p_login, 'from', p_from, 'undone', n, 'refused', refused,
+  RETURN jsonb_build_object('login', p_login, 'from', p_from, 'undone', n, 'refused', refused, 'dropped_tables', dropped,
     'remaining', (SELECT count(*) FROM guard.audit x WHERE x.login = p_login AND x.id >= coalesce(p_from, 0)
-                  AND NOT EXISTS (SELECT 1 FROM guard.undone u WHERE u.audit_id = x.id)),
+                  AND NOT EXISTS (SELECT 1 FROM guard.undone u WHERE u.audit_id = x.id)
+                  AND EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = x.target)),
     'kept', (SELECT count(*) FROM guard.audit x WHERE x.login = p_login AND x.id < coalesce(p_from, 0)
              AND NOT EXISTS (SELECT 1 FROM guard.undone u WHERE u.audit_id = x.id)));
 END $$;
@@ -484,6 +585,7 @@ END $$;
 -- Works after the login is retired.
 CREATE OR REPLACE FUNCTION guard.report(p_login name) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, guard, pg_temp AS $$
+  SELECT guard.known_login(p_login);
   SELECT to_jsonb(s) || jsonb_build_object('login', p_login,
     'changes', (SELECT count(*) FROM guard.audit a WHERE a.login = p_login),
     'changes_since_first_strike', (SELECT count(*) FROM guard.audit a WHERE a.login = p_login AND a.id >= s.struck_from),
@@ -491,9 +593,12 @@ SET search_path = pg_catalog, guard, pg_temp AS $$
     'first', (SELECT min(a.at) FROM guard.audit a WHERE a.login = p_login),
     'last', (SELECT max(a.at) FROM guard.audit a WHERE a.login = p_login),
     'tables', (SELECT coalesce(jsonb_object_agg(z.t, z.ops), '{}') FROM (
-                 SELECT a.target::text AS t, jsonb_build_object('inserted', count(*) FILTER (WHERE a.op = 'I'),
-                   'updated', count(*) FILTER (WHERE a.op = 'U'), 'deleted', count(*) FILTER (WHERE a.op = 'D')) AS ops
-                 FROM guard.audit a WHERE a.login = p_login GROUP BY a.target) z),
+                 SELECT guard.table_name(y.target, y.target_name) AS t, jsonb_build_object('inserted', sum(y.inserted),
+                   'updated', sum(y.updated), 'deleted', sum(y.deleted)) AS ops
+                 FROM (SELECT a.target, a.target_name, count(*) FILTER (WHERE a.op = 'I') AS inserted,
+                         count(*) FILTER (WHERE a.op = 'U') AS updated, count(*) FILTER (WHERE a.op = 'D') AS deleted
+                       FROM guard.audit a WHERE a.login = p_login GROUP BY a.target, a.target_name) y
+                 GROUP BY 1) z),
     'budget', (SELECT jsonb_build_object('rows_left', b.rows_left, 'bytes_left', b.bytes_left, 'max_table_share', b.max_table_share)
                FROM guard.budget b WHERE b.login = p_login))
   FROM guard.strikes(p_login) s
@@ -503,12 +608,14 @@ $$;
 -- first change, and guard.undo(login, from) undoes that transaction and all the login did after it.
 CREATE OR REPLACE FUNCTION guard.timeline(p_login name) RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = pg_catalog, guard, pg_temp AS $$
+  SELECT guard.known_login(p_login);
   SELECT coalesce(jsonb_agg(jsonb_build_object('from', t.from_id, 'at', t.began, 'changes', t.changes, 'undone', t.undone,
       'after_first_strike', coalesce(t.from_id >= s.struck_from, false), 'tables', t.tables) ORDER BY t.from_id), '[]'::jsonb)
   FROM guard.strikes(p_login) s, (
     SELECT min(x.from_id) AS from_id, min(x.began) AS began, sum(x.changes) AS changes, sum(x.undone) AS undone,
-           jsonb_object_agg(x.target, jsonb_build_object('inserted', x.inserted, 'updated', x.updated, 'deleted', x.deleted)) AS tables
-    FROM (SELECT a.tx, a.target::text AS target, min(a.id) AS from_id, min(a.at) AS began, count(*) AS changes,
+           jsonb_object_agg(guard.table_name(x.target, x.target_name),
+                            jsonb_build_object('inserted', x.inserted, 'updated', x.updated, 'deleted', x.deleted)) AS tables
+    FROM (SELECT a.tx, a.target, max(a.target_name) AS target_name, min(a.id) AS from_id, min(a.at) AS began, count(*) AS changes,
                  count(u.audit_id) AS undone, count(*) FILTER (WHERE a.op = 'I') AS inserted,
                  count(*) FILTER (WHERE a.op = 'U') AS updated, count(*) FILTER (WHERE a.op = 'D') AS deleted
           FROM guard.audit a LEFT JOIN guard.undone u ON u.audit_id = a.id WHERE a.login = p_login GROUP BY a.tx, a.target) x
@@ -566,8 +673,17 @@ SET search_path = pg_catalog, guard, pg_temp AS $$
     WHERE NOT t.tgisinternal AND t.tgenabled <> 'O'
       AND (c.relnamespace = 'guard'::regnamespace OR c.oid IN (SELECT g.target FROM guard.guarded g))
     UNION ALL
-    SELECT 'guarded table has been dropped: ' || g.target::text FROM guard.guarded g
+    SELECT 'guarded table has been dropped: ' || coalesce(g.name, g.target::text) FROM guard.guarded g
     WHERE NOT EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = g.target)
+    UNION ALL
+    -- What a table has become since it was protected: partitioned or inherited from, or without its key.
+    SELECT 'guarded table ' || g.target::text || ' can no longer be protected: ' || guard.unsupported(g.target) FROM guard.guarded g
+    WHERE guard.unsupported(g.target) IS NOT NULL
+    UNION ALL
+    -- Its triggers were built with the old key (their arguments), so audit rows would be keyed by it.
+    SELECT 'guarded table ' || g.target::text || ' has a different primary key from the one its triggers use' FROM guard.guarded g
+    WHERE EXISTS (SELECT 1 FROM pg_class c WHERE c.oid = g.target) AND guard.unsupported(g.target) IS NULL
+      AND guard.primary_key(g.target) IS DISTINCT FROM g.pk_columns
     UNION ALL
     SELECT 'guarded table without trigger ' || w.name || ': ' || g.target::text
     FROM guard.guarded g CROSS JOIN (VALUES ('!guard_intent'), ('guard_intent_done'), ('guard_row'), ('guard_statement'),
@@ -737,9 +853,10 @@ GRANT EXECUTE ON FUNCTION guard.report(name), guard.timeline(name), guard.freeze
   guard.agent_logins() TO guard_keeper;
 GRANT EXECUTE ON FUNCTION guard.issue_budget(name, bigint, bigint, numeric, integer), guard.stop_agent(name) TO guard_broker;
 
--- A rerun brings the tables already protected up to this file's triggers, and clears intents an
--- earlier version left behind (any of a transaction that is over).
-SELECT guard.protect(c.oid) FROM guard.guarded g JOIN pg_class c ON c.oid = g.target;
+-- A rerun brings the tables already protected up to this file's triggers and to their primary keys
+-- as they now are, and clears intents an earlier version left behind (any of a transaction that is
+-- over). A table that can no longer be protected is left as it is, for the self-check to report.
+SELECT guard.protect(c.oid) FROM guard.guarded g JOIN pg_class c ON c.oid = g.target WHERE guard.unsupported(c.oid) IS NULL;
 DELETE FROM guard.intent i WHERE txid_status(i.tx) IS DISTINCT FROM 'in progress';
 
 UPDATE guard.gate SET fingerprint = guard.fingerprint(),

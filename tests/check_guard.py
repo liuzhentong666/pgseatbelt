@@ -10,6 +10,7 @@ that gets through is a GAP and the exit code is 1; a NOTE records something allo
 Drops the databases and every role it made, unless --keep.
 """
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -379,8 +380,11 @@ class Attacks:
     def server_log(self):
         major = self.owner.sql("SELECT current_setting('server_version_num')::int/10000;")
         path = self.owner.sql("SELECT coalesce(pg_current_logfile(),'');") or f"/var/log/postgresql/postgresql-{major}-main.log"
-        result = self.owner.execute(f"SELECT pg_read_file('{path}',greatest((pg_stat_file('{path}')).size-2000000,0),2000000);", self.database)
-        return result.stdout if result.returncode == 0 else None
+        # As bytes: the tail of a log can hold what no text function takes, such as NUL bytes left by an unclean
+        # shutdown, or half a character where the tail was cut.
+        result = self.owner.execute(f"SELECT encode(pg_read_binary_file('{path}',greatest((pg_stat_file('{path}')).size-2000000,0),2000000),"
+                                    "'base64');", self.database)
+        return base64.b64decode(result.stdout).decode("utf-8", "replace") if result.returncode == 0 else None
 
     def incidents(self):
         """What agents have really done on their own (docs/AGENT_BOUNDARY.md in Forkpoint names each case), replayed."""
@@ -831,6 +835,126 @@ class Attacks:
         found = self.problems()
         self.record("drift", "clean_again_after_every_repair", found == [], str(found))
 
+    def lifecycle(self):
+        """The application's schema changes after the install: what the guard refuses, what it finds, and how the owner settles it."""
+        note = lambda name, ok, detail: self.record("lifecycle", name, ok, detail)
+        value = lambda table, row: self.owner.sql(f"SELECT v FROM {table} WHERE id={row};")
+        # A table the guard cannot cover is refused, not half protected.
+        self.ok(self.owner, "CREATE TABLE shop.atk_parted(id int, d date NOT NULL, PRIMARY KEY (id, d)) PARTITION BY RANGE (d);"
+                            "CREATE TABLE shop.atk_parted_1 PARTITION OF shop.atk_parted FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');"
+                            "CREATE TABLE shop.atk_parent(id int PRIMARY KEY); CREATE TABLE shop.atk_child() INHERITS (shop.atk_parent);"
+                            "CREATE TABLE shop.atk_keyless(id int);")
+        for label, table in (("a_partitioned_table", "shop.atk_parted"), ("a_partition", "shop.atk_parted_1"),
+                             ("a_table_others_inherit_from", "shop.atk_parent"), ("a_table_with_no_primary_key", "shop.atk_keyless")):
+            self.refused("lifecycle", f"protecting_{label}_is_refused", self.owner, f"SELECT guard.protect('{table}');", ("0A000",))
+        left = self.owner.sql("SELECT count(*) FROM guard.guarded g JOIN pg_class c ON c.oid = g.target "
+                              "WHERE c.relname IN ('atk_parted', 'atk_parted_1', 'atk_parent', 'atk_keyless');")
+        triggers = self.owner.sql("SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE NOT t.tgisinternal "
+                                  "AND c.relname IN ('atk_parted', 'atk_parted_1', 'atk_parent', 'atk_keyless');")
+        note("a_refused_table_is_left_untouched", left == "0" and triggers == "0", f"{left} rows in guard.guarded, {triggers} triggers")
+
+        self.ok(self.owner, "CREATE TABLE shop.atk_life(id int PRIMARY KEY, code text NOT NULL UNIQUE, v text NOT NULL);"
+                            "INSERT INTO shop.atk_life SELECT n, 'c' || n, 'x' FROM generate_series(1, 40) n; SELECT guard.protect('shop.atk_life');")
+        # A child table added later: the parent's row triggers do not fire for the child's rows.
+        self.ok(self.owner, "CREATE TABLE shop.atk_life_child() INHERITS (shop.atk_life); INSERT INTO shop.atk_life_child VALUES (1000, 'child', 'x');")
+        through, through_name = self.issue()
+        try:
+            found = self.problems()
+            landed = self.code(through, "UPDATE shop.atk_life SET v='through the parent' WHERE id=1000;")
+            seen = self.audit_count(through_name)
+        finally:
+            self.ok(self.owner, "DROP TABLE shop.atk_life_child;")
+        note("a_child_table_added_later_is_found", "guarded table shop.atk_life can no longer be protected: other tables inherit from it" in found,
+             "; ".join(found) or "NOT FOUND")
+        note("until_then_a_write_through_the_parent_reaches_the_childs_rows", None,
+             f"accepted like any drift the self-check finds: the write {landed} with {seen} audit rows, until the keeper's round freezes writes")
+
+        # The primary key changes: found, taken up by a rerun, and undo never uses a key that is no longer one.
+        keyed, keyed_name = self.issue()
+        self.ok(keyed, "UPDATE shop.atk_life SET v='old key' WHERE id=1;")
+        self.ok(self.owner, "BEGIN; ALTER TABLE shop.atk_life DROP CONSTRAINT atk_life_pkey; ALTER TABLE shop.atk_life ADD PRIMARY KEY (code); COMMIT;")
+        found = self.problems()
+        note("a_changed_primary_key_is_found", "guarded table shop.atk_life has a different primary key from the one its triggers use" in found,
+             "; ".join(found) or "NOT FOUND")
+        gb.install(self.owner, self.database)
+        stored = self.owner.sql("SELECT array_to_string(g.pk_columns, ',') || ' | ' || pg_get_triggerdef(t.oid) FROM guard.guarded g "
+                                "JOIN pg_trigger t ON t.tgrelid = g.target AND t.tgname = 'guard_row' WHERE g.target = 'shop.atk_life'::regclass;")
+        found = self.problems()
+        note("rerunning_the_install_takes_up_the_new_key", stored.startswith("code | ") and stored.endswith("guard.charge('code')") and found == [],
+             f"{stored[:8]}... {stored[-22:]}; problems {found}")
+        self.ok(keyed, "UPDATE shop.atk_life SET v='new key' WHERE code='c2';")
+        result = undo_login(self.keeper, keyed_name, self.database)
+        refused = result["refused"] or {}
+        note("undo_stops_at_a_change_keyed_by_a_primary_key_that_is_gone",
+             result["undone"] == 1 and refused.get("code") == "AB005" and "primary key" in refused.get("message", "")
+             and (value("shop.atk_life", 1), value("shop.atk_life", 2)) == ("old key", "x"),
+             f"{result['undone']} undone, then {refused.get('code')}: {refused.get('message')}")
+        self.ok(self.owner, "BEGIN; ALTER TABLE shop.atk_life DROP CONSTRAINT atk_life_pkey; ALTER TABLE shop.atk_life ADD PRIMARY KEY (id); COMMIT;")
+        gb.install(self.owner, self.database)
+        result = undo_login(self.keeper, keyed_name, self.database)
+        note("undo_finishes_once_the_key_is_back", result["undone"] == 1 and result["refused"] is None and result["remaining"] == 0
+             and value("shop.atk_life", 1) == "x", f"{result['undone']} undone, refused {result['refused']}")
+
+        # Taking a table out of the guard is the owner's, and it does not strand the changes already made.
+        last, last_name = self.issue()
+        self.ok(last, "UPDATE shop.atk_life SET v='before unprotect' WHERE id=3;")
+        for label, connection in (("an_agent", last), ("the_keeper", self.keeper), ("the_broker", self.broker)):
+            self.refused("lifecycle", f"{label}_cannot_unprotect_a_table", connection, "SELECT guard.unprotect('shop.atk_life');")
+        self.ok(self.owner, "SELECT guard.unprotect('shop.atk_life');")
+        triggers = self.owner.sql("SELECT count(*) FROM pg_trigger WHERE tgrelid = 'shop.atk_life'::regclass AND NOT tgisinternal;")
+        found = self.problems()
+        note("unprotecting_takes_the_triggers_off_and_leaves_no_problem", triggers == "0" and found == [], f"{triggers} triggers; problems {found}")
+        self.refused("lifecycle", "an_agent_can_no_longer_write_an_unprotected_table", last, "UPDATE shop.atk_life SET v='after' WHERE id=4;")
+        result = undo_login(self.keeper, last_name, self.database)
+        note("undo_still_puts_back_what_was_changed_before_unprotecting", result["undone"] == 1 and result["refused"] is None
+             and value("shop.atk_life", 3) == "x", f"{result['undone']} undone, refused {result['refused']}")
+        self.refused("lifecycle", "unprotecting_a_table_that_is_not_protected_is_refused", self.owner, "SELECT guard.unprotect('shop.atk_life');", ("42P01",))
+
+        # A protected table is dropped: found by its name, undo goes on past it, and the owner accepts it with one command.
+        self.ok(self.owner, "CREATE TABLE shop.atk_gone(id int PRIMARY KEY, v text NOT NULL);"
+                            "INSERT INTO shop.atk_gone SELECT n, 'x' FROM generate_series(1, 40) n; SELECT guard.protect('shop.atk_gone');")
+        dropper, dropper_name = self.issue()
+        row = self.rows(1)[0]
+        before = self.price(row)
+        self.ok(dropper, self.update([row]))
+        self.ok(dropper, "UPDATE shop.atk_gone SET v='agent' WHERE id=1;")
+        self.ok(self.owner, "DROP TABLE shop.atk_gone;")
+        found = self.problems()
+        note("a_dropped_protected_table_is_found_by_its_name", "guarded table has been dropped: shop.atk_gone" in found, "; ".join(found) or "NOT FOUND")
+        report = json.loads(self.keeper.sql(f"SELECT guard.report('{dropper_name}');", self.database))
+        note("the_report_still_names_the_dropped_table", report["tables"].get("shop.atk_gone (dropped)") == {"inserted": 0, "updated": 1, "deleted": 0},
+             json.dumps(report["tables"]))
+        result = undo_login(self.keeper, dropper_name, self.database)
+        note("undo_passes_over_a_dropped_table_and_undoes_the_rest",
+             result["undone"] == 1 and result["refused"] is None and result["remaining"] == 0
+             and result["dropped_tables"] == {"shop.atk_gone": 1} and self.price(row) == before,
+             f"{result['undone']} undone, refused {result['refused']}, passed over {result['dropped_tables']}")
+        done = subprocess.run([sys.executable, str(ROOT / "guard.py"), "unprotect", "--database", self.database, "shop.atk_gone"],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180, cwd=ROOT, creationflags=FLAGS)
+        answer = json.loads(done.stdout) if done.returncode == 0 else {}
+        found = self.problems()
+        note("the_owner_accepts_the_drop_from_the_command_line", answer.get("problems") == [] and found == [],
+             f"exit {done.returncode}; problems {found}; {done.stderr.strip()[:200]}")
+
+        # A name nobody was issued is a mistake in the name, not a login that did nothing.
+        for label, statement in (("a_report", "SELECT guard.report('guard_atk_nobody');"), ("a_timeline", "SELECT guard.timeline('guard_atk_nobody');"),
+                                 ("an_undo", "SELECT guard.undo('guard_atk_nobody');")):
+            self.refused("lifecycle", f"{label}_of_a_login_never_issued_is_refused", self.keeper, statement, ("42704",))
+
+        # Installed by a role that is not a superuser, the guard would look whole and not work.
+        fingerprint = self.owner.sql("SELECT fingerprint FROM guard.gate;")
+        plain, plain_name = self.hand_built('ALTER ROLE {name} CREATEROLE; GRANT CONNECT ON DATABASE "{database}" TO {name};')
+        try:
+            result = plain.execute((ROOT / "guard.sql").read_text(encoding="utf-8"), self.database)
+        finally:
+            self.drop(plain_name)
+        note("installing_as_a_role_that_is_not_a_superuser_is_refused",
+             result.returncode != 0 and sqlstate(result.stderr) == "42501" and "has to be installed by a superuser" in result.stderr
+             and self.owner.sql("SELECT fingerprint FROM guard.gate;") == fingerprint and self.problems() == [],
+             " ".join(result.stderr.split())[:200])
+        open_still = self.owner.sql("SELECT frozen_reason IS NULL FROM guard.gate;")
+        note("none_of_this_froze_or_reopened_writes_by_itself", open_still == "t", f"gate open: {open_still}")
+
     def freeze(self):
         """Fail closed: a problem freezes writes, reads go on, and only the owner opens them again."""
         b, b_name = self.b, self.b_name
@@ -1239,7 +1363,7 @@ def main():
         try:
             attacks.set_up()
             for group in ("normal", "escalate", "guard_internals", "agents", "budgets", "incidents", "stopped", "held_up", "storage",
-                          "undo", "strikes", "small_tables", "drift"):
+                          "undo", "strikes", "small_tables", "drift", "lifecycle"):
                 getattr(attacks, group)()
             target, name = attacks.issue()
             attacks.ok(target, attacks.update(attacks.rows(1)))

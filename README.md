@@ -11,7 +11,7 @@ be rolled back to the state before the trouble began.
 Inside the database it goes by a short name, `guard`: the `guard` schema, `guard.sql`, `guard.py`,
 and the roles `guard_worker`, `guard_keeper` and `guard_broker`.
 
-**Status:** a prototype (2026-11-11). Tested on one laptop with the attack suite below, reviewed
+**Status:** a prototype (2026-11-12). Tested on one laptop with the attack suite below, reviewed
 only by the assistant that wrote it, and not yet used on real data.
 
 ## Why
@@ -43,6 +43,8 @@ changes undoable.
   changed, and stops at newer work (AB005). It undoes everything the login did, or goes back to a
   point and keeps the work before it: the login's first strike, or any of its transactions. `report`
   says what a login changed, from the audit log, with its strikes and its transactions in order.
+  Both refuse a name no login was ever issued under, so a mistyped name is not read as "changed
+  nothing".
 - **A keeper.** Its self-check reads the catalog and freezes agents' writes when anything is wrong.
   It ends stuck agent sessions: expired logins, stopped logins, writes while frozen, table locks, a
   transaction idle for 60 s or open for 300 s, and idle sessions holding advisory locks. Only the
@@ -70,6 +72,7 @@ python guard.py undo --database APP_DB LOGIN [--since-strike | --from CHANGE]
 python guard.py freeze --database APP_DB "reason"
 python guard.py unfreeze --database APP_DB
 python guard.py backup --database APP_DB --to FOLDER
+python guard.py unprotect --database APP_DB shop.orders
 python guard.py uninstall --database APP_DB --audit-to FOLDER [--drop-roles]
 ```
 
@@ -78,9 +81,14 @@ needs `--database`.
 
 Before installing on a real application:
 
+- Installing needs a superuser. For any other role it is refused with nothing changed, because the
+  guard would look whole and not work: its keeper could end no session and its broker could issue
+  no login. A managed service that gives out no superuser cannot run it yet.
 - Installing revokes CONNECT and TEMPORARY on that database from PUBLIC, and the creation of large
   objects, so any login that relies on them needs its own grant first.
-- Protected tables need a primary key. Prefer bigint keys, since agents can use up sequence values.
+- A protected table has to be an ordinary table with a primary key. A partitioned table, a
+  partition, and a table that other tables inherit from are refused, because the guard's triggers
+  do not cover them. Prefer bigint keys, since agents can use up sequence values.
 - Protecting a table waits at most 2 s for its lock, so a busy table fails with nothing changed
   instead of holding up the application; run it again. Rerunning install brings the tables already
   protected up to the current triggers.
@@ -112,6 +120,24 @@ python guard.py undo --database APP_DB LOGIN --from CHANGE
 `undo` without an option puts back everything the login did. Every form of `undo` stops the login
 first, works after the login is retired, and stops at a row that someone else has changed since
 (AB005) instead of overwriting it.
+
+## When the application's schema changes
+
+The self-check finds a protected table that has changed under the guard, and the keeper's next round
+freezes agents' writes, as for any other problem. The owner settles it, then runs `unfreeze`.
+
+- **A protected table was dropped.** The problem names it. `python guard.py unprotect --database
+  APP_DB shop.orders` says the drop was meant. `report` still names the table, and `undo` passes
+  over the changes made to it, which nothing can put back, and counts them in `dropped_tables`.
+- **Its primary key changed.** Rerun `install`, which rebuilds the table's triggers with the new
+  key. `undo` stops with AB005 at a change recorded under a key that is no longer the primary key,
+  since that key may now name several rows.
+- **It became partitioned or inherited from, or lost its primary key.** It can no longer be
+  protected: put it back as it was, or take it out with `unprotect`.
+
+`unprotect` is also how a table leaves the guard on purpose. The guard's triggers go, and so does
+everything `guard_worker` was granted on the table and its sequences, reading included, so agents
+can no longer write it. Its audit rows stay, and `undo` still puts them back.
 
 ## Uninstall
 
@@ -151,7 +177,14 @@ transaction of that strike keeps nothing, a strike survives a caught error, an a
 its own count, the keeper ends a stopped login's sessions, and `undo` goes back to the first strike
 or to a chosen transaction. The same is checked through `guard.py run`, `report` and `undo`.
 
-Result on 2026-11-11 (`results/attack-results.json`): 308 held, 15 NOTEs, 0 gaps, with every test
+A lifecycle group changes the schema under the guard. Protecting a partitioned table, a partition, a
+table others inherit from or a table with no primary key is refused; a child table added later, a
+changed primary key and a dropped table are each found; `undo` stops at a change keyed by a primary
+key that is gone, finishes once the key is back, and passes over a dropped table; only the owner can
+`unprotect`; a name no login was issued under is refused; and installing as a role that is not a
+superuser is refused with nothing changed.
+
+Result on 2026-11-12 (`results/attack-results.json`): 334 held, 16 NOTEs, 0 gaps, with every test
 database, role and login dropped afterwards. The groups not ported need Forkpoint's branches: the
 read-set merges and the checks on files, commits and history. The mapping and the earlier runs are
 in the local forkpoint-experiments repository (`experiments/guard_full_suite`,
@@ -165,11 +198,11 @@ put every right, schema and trigger back exactly, compared by what the rights me
 while a view depends on the guard. The first database is then installed and uninstalled a second
 time, after a protected table was dropped, and the last uninstall runs from the command line with
 `--drop-roles`, which has to be refused first while the other database still grants the roles
-something. Result on 2026-11-11 (`results/uninstall-results.json`): 17 held, 0 gaps.
+something. Result on 2026-11-12 (`results/uninstall-results.json`): 17 held, 0 gaps.
 
 ## Tested on
 
-Only this setup, on 2026-11-09, 2026-11-10 and 2026-11-11:
+Only this setup, on 2026-11-09, 2026-11-10, 2026-11-11 and 2026-11-12:
 
 - One Windows 11 laptop (build 26200).
 - PostgreSQL 16.15, the Ubuntu 24.04.2 package, running in WSL 2 (2.6.3, kernel 6.6.87.2).
@@ -194,12 +227,18 @@ It needs PostgreSQL 16 or later, because it uses 16's role options. Only 16.15 h
 - **No staging.** An agent's write is live when it commits. Stale reads are the agent's own job
   (`SELECT ... FOR UPDATE`).
 - **Undo has gaps.** It does not handle GENERATED ALWAYS identity or generated columns, or a table
-  whose columns changed since (one dropped since stops it with AB005); an error during undo undoes
-  nothing. No command redoes what an undo put back, which is why `--undo-on-stop` is a choice and
-  not the default. It goes back to the login's first strike, and no further.
+  whose columns changed since; an error during undo undoes nothing. A change recorded under a
+  primary key the table no longer has stops it (AB005), and a change to a table dropped since
+  cannot be put back at all. No command redoes what an undo put back, which is why
+  `--undo-on-stop` is a choice and not the default. It goes back to the login's first strike, and
+  no further.
+- **Schema changes are found, not prevented.** Between a change to a protected table and the
+  keeper's next round, the guard is as the change left it. A table the owner makes a child of a
+  protected table, for one, can be written through its parent with nothing charged or recorded,
+  until that round freezes writes.
 - **Trusted parts.** The broker, the keeper and the owner's credentials must be out of agents' reach.
 - **Not yet tested:** psql on native Linux or macOS, PostgreSQL 17 or later, a remote server over
-  TLS, partitioned tables, a real container, a second machine, and an outside review.
+  TLS, a real container, a second machine, and an outside review.
 
 ## Origin
 

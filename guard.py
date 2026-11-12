@@ -1,6 +1,7 @@
 """Give each agent its own login on a database the guard protects, and keep the guard around those logins.
 
   install   run guard.sql as the owner, and protect the tables named with --protect
+  unprotect take one table out of the guard as the owner, or accept that a protected table was dropped
   uninstall take it all out again as the owner, saving the audit log first; --drop-roles also drops
             the three roles and the logins the broker issued
   run      issue a login, run a command with it in PGUSER, PGPASSWORD and the like, keep the keeper's
@@ -18,7 +19,7 @@
   backup    dump the database outside itself, and keep the dump only if it restores
 
 A port of Forkpoint's agent_boundary.py (1273af5) to guard.sql. Every command needs --database. It runs
-as guard_broker and guard_keeper, with install, uninstall, backup and unfreeze as the owner, and has to run where
+as guard_broker and guard_keeper, with install, unprotect, uninstall, backup and unfreeze as the owner, and has to run where
 agents cannot reach it or its connection config. The password is random, never leaves this process
 except in the command's environment, and reaches the server only as a SCRAM verifier.
 """
@@ -41,6 +42,7 @@ from db import FLAGS, Connection, add_connection_arguments, database_name
 HERE = Path(__file__).resolve().parent
 WORKER, KEEPER, BROKER = "guard_worker", "guard_keeper", "guard_broker"
 LOGIN = r"[a-z][a-z0-9_]{0,62}"
+TABLE = r"[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*"
 SIZE = r"[1-9][0-9]{0,8}(?:kB|MB|GB)"
 # What a command needs to start at all, as in agent_boundary.py; --pass-env adds a name on purpose.
 PASSED_ENVIRONMENT = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME",
@@ -66,11 +68,24 @@ def scram_verifier(password):
 def install(owner, database, protect=()):
     """guard.sql as the owner (re-runnable), then guard.protect for each table named."""
     for table in protect:  # every name first, so a typo stops it before anything changes
-        if not re.fullmatch(r"[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*", table):
+        if not re.fullmatch(TABLE, table):
             raise ValueError(f"Not a schema-qualified table name: {table}")
     owner.sql((HERE / "guard.sql").read_text(encoding="utf-8"), database)
     for table in protect:
         owner.sql(f"SELECT guard.protect('{table}');", database)
+    return json.loads(owner.sql("SELECT guard.boundary_problems();", database))
+
+
+def unprotect(owner, database, table):
+    """Take one table out of the guard, as the owner; returns what the self-check finds afterwards.
+
+    Agents can no longer write the table, its audit rows stay, and undo still works on them. For a
+    protected table that was dropped, table is the name the self-check gives (a number, for one
+    protected by a version that did not record names yet). Writes frozen meanwhile stay frozen.
+    """
+    if not re.fullmatch(TABLE + r"|[0-9]{1,10}", table):
+        raise ValueError(f"Not a schema-qualified table name: {table}")
+    owner.sql(f"SELECT guard.unprotect('{table}');", database)
     return json.loads(owner.sql("SELECT guard.boundary_problems();", database))
 
 
@@ -475,6 +490,8 @@ def main():
     actions = parser.add_subparsers(dest="action", required=True)
     setup = actions.add_parser("install", help="run guard.sql as the owner and protect tables")
     setup.add_argument("--protect", action="append", default=[], help="a schema-qualified table agents may write; repeat")
+    release = actions.add_parser("unprotect", help="take one table out of the guard, or accept that a protected table was dropped")
+    release.add_argument("table", help="its schema-qualified name; for a dropped table, the name the self-check gives")
     remove = actions.add_parser("uninstall", help="take the guard out as the owner, saving its audit log first")
     remove.add_argument("--audit-to", required=True, help="a folder for the audit log, the only record of what agents did")
     remove.add_argument("--drop-roles", action="store_true",
@@ -531,6 +548,10 @@ def main():
         if args.action == "install":
             owner = connect(args, None)
             print(json.dumps(dict(problems=install(owner, owner.settings["database"], args.protect)), indent=2))
+            return
+        if args.action == "unprotect":
+            owner = connect(args, None)
+            print(json.dumps(dict(unprotected=args.table, problems=unprotect(owner, owner.settings["database"], args.table)), indent=2))
             return
         if args.action == "uninstall":
             owner = connect(args, None)

@@ -1,5 +1,5 @@
 {
-  "database": "agentdb_test_guardsuite_d2929e60",
+  "database": "agentdb_test_guardsuite_f4821960",
   "server": "PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
   "guard_roles_existed_before": null,
   "problems_before_allowing_restock": [
@@ -8,8 +8,8 @@
     "guard_worker may execute shop.restock(bigint,integer), which runs as its owner"
   ],
   "left_behind": "0 databases, 0 guard roles",
-  "holds": 308,
-  "notes": 15,
+  "holds": 334,
+  "notes": 16,
   "gaps": [],
   "results": [
     {
@@ -28,7 +28,7 @@
       "group": "normal",
       "name": "the_audit_names_the_real_login",
       "status": "HOLDS",
-      "detail": "guard_atk_b6f0105a4238"
+      "detail": "guard_atk_81a75b6439ad"
     },
     {
       "group": "normal",
@@ -46,7 +46,7 @@
       "group": "escalate",
       "name": "reset_role_leaves_nothing",
       "status": "HOLDS",
-      "detail": "guard_atk_b6f0105a4238/guard_atk_b6f0105a4238/off"
+      "detail": "guard_atk_81a75b6439ad/guard_atk_81a75b6439ad/off"
     },
     {
       "group": "escalate",
@@ -634,7 +634,7 @@
       "group": "agents",
       "name": "status_shows_only_itself",
       "status": "HOLDS",
-      "detail": "{\"login\": \"guard_atk_b6f0105a4238\", \"frozen\": null, \"changed\": {\"shop.products\": 2}, \"stopped\": false, \"strikes\": 0, \"rows_left\": 48, \"bytes_left\": 4999256, \"max_strikes\": 3, \"valid_until\": \"2026-11-1"
+      "detail": "{\"login\": \"guard_atk_81a75b6439ad\", \"frozen\": null, \"changed\": {\"shop.products\": 2}, \"stopped\": false, \"strikes\": 0, \"rows_left\": 48, \"bytes_left\": 4999255, \"max_strikes\": 3, \"valid_until\": \"2026-11-1"
     },
     {
       "group": "budget",
@@ -760,7 +760,7 @@
       "group": "incident",
       "name": "the_refusal_says_how_the_change_can_land",
       "status": "HOLDS",
-      "detail": "ERROR:  AB007: Too large a share of shop.products\nDETAIL:  {\"rule\": \"beyond 20 rows, at most max_table_share of the table\", \"login\": \"guard_atk_c1bc4251004a\", \"strikes\": 3, \"max_strikes\": 3, \"size_before\": 4000, \"max_table_share\": 0.1, \"changed_by_this_login\": 401, \"existing_changed_by_this_login\": "
+      "detail": "ERROR:  AB007: Too large a share of shop.products\nDETAIL:  {\"rule\": \"beyond 20 rows, at most max_table_share of the table\", \"login\": \"guard_atk_ddf3e1df7c39\", \"strikes\": 3, \"max_strikes\": 3, \"size_before\": 4000, \"max_table_share\": 0.1, \"changed_by_this_login\": 401, \"existing_changed_by_this_login\": "
     },
     {
       "group": "incident",
@@ -808,7 +808,7 @@
       "group": "incident",
       "name": "a_wiped_table_comes_back_identical",
       "status": "HOLDS",
-      "detail": "0 rows after the wipe; identical after undo: True; undo took 6.0 s"
+      "detail": "0 rows after the wipe; identical after undo: True; undo took 8.6 s"
     },
     {
       "group": "incident",
@@ -838,7 +838,7 @@
       "group": "incident",
       "name": "a_refused_attempt_leaves_a_trace",
       "status": "HOLDS",
-      "detail": "refused AB007; log: 2026-11-11 00:54:16.998 CST [2136699] guard_atk_b6f0105a4238@agentdb_test_guardsuite_d2929e60 LOG:  statement: UPDATE shop.settings SET value='x_marker_bd990f68532c';"
+      "detail": "refused AB007; log: 2026-11-12 09:27:21.875 CST [2467] guard_atk_81a75b6439ad@agentdb_test_guardsuite_f4821960 LOG:  statement: UPDATE shop.settings SET value='x_marker_2a76e418b629';"
     },
     {
       "group": "stop",
@@ -856,7 +856,7 @@
       "group": "stop",
       "name": "stopped_login_never_queues_for_a_row_lock",
       "status": "HOLDS",
-      "detail": "answered in 0.9 s while the row was held"
+      "detail": "answered in 0.3 s while the row was held"
     },
     {
       "group": "hold",
@@ -868,19 +868,19 @@
       "group": "hold",
       "name": "keeper_ends_an_idle_holder_and_writes_resume",
       "status": "HOLDS",
-      "detail": "ended {'guard_atk_b6f0105a4238': 'idle in transaction'}; next write rc=0"
+      "detail": "ended {'guard_atk_81a75b6439ad': 'idle in transaction'}; next write rc=0"
     },
     {
       "group": "hold",
       "name": "keeper_ends_a_holder_that_looks_busy",
       "status": "HOLDS",
-      "detail": "ended {'guard_atk_b6f0105a4238': 'transaction too long'}; next write rc=0"
+      "detail": "ended {'guard_atk_81a75b6439ad': 'transaction too long'}; next write rc=0"
     },
     {
       "group": "hold",
       "name": "keeper_ends_an_idle_session_holding_an_advisory_lock",
       "status": "HOLDS",
-      "detail": "{'guard_atk_b6f0105a4238': 'idle holding an advisory lock'}"
+      "detail": "{'guard_atk_81a75b6439ad': 'idle holding an advisory lock'}"
     },
     {
       "group": "hold",
@@ -898,7 +898,7 @@
       "group": "hold",
       "name": "keeper_ends_a_table_lock_at_its_next_round",
       "status": "HOLDS",
-      "detail": "ended {'guard_atk_b6f0105a4238': 'holding or waiting for a table lock'}; next read rc=0"
+      "detail": "ended {'guard_atk_81a75b6439ad': 'holding or waiting for a table lock'}; next read rc=0"
     },
     {
       "group": "hold",
@@ -910,7 +910,7 @@
       "group": "hold",
       "name": "keeper_ends_a_session_waiting_for_a_table_lock",
       "status": "HOLDS",
-      "detail": "ended {'guard_atk_b6f0105a4238': 'holding or waiting for a table lock'}; next read rc=0"
+      "detail": "ended {'guard_atk_81a75b6439ad': 'holding or waiting for a table lock'}; next read rc=0"
     },
     {
       "group": "hold",
@@ -1006,7 +1006,7 @@
       "group": "undo",
       "name": "rerunning_undo_changes_nothing",
       "status": "HOLDS",
-      "detail": "{'from': None, 'kept': 0, 'login': 'guard_atk_78b80100df82', 'undone': 0, 'refused': None, 'remaining': 0}"
+      "detail": "{'from': None, 'kept': 0, 'login': 'guard_atk_26708c4a5fa9', 'undone': 0, 'refused': None, 'remaining': 0, 'dropped_tables': {}}"
     },
     {
       "group": "undo",
@@ -1018,7 +1018,7 @@
       "group": "undo",
       "name": "an_open_transaction_cannot_hold_up_undo",
       "status": "HOLDS",
-      "detail": "finished in 2.4 s"
+      "detail": "finished in 0.8 s"
     },
     {
       "group": "undo",
@@ -1036,7 +1036,7 @@
       "group": "undo",
       "name": "the_timeline_lists_a_logins_transactions",
       "status": "HOLDS",
-      "detail": "[{\"at\": \"2026-11-11T00:55:31.381561+08:00\", \"from\": 23719, \"tables\": {\"shop.products\": {\"deleted\": 0, \"updated\": 1, \"inserted\": 0}}, \"undone\": 0, \"changes\": 1, \"after_first_strike\": false}, {\"at\": \"2026-11-11T00:55:32.358623+08:00\", \"from\": 23720, \"tables\": {\"shop.products\": {\"deleted\": 1, \"updated\": 1, \"inserted\": 0}}, \"undone\": 0, \"changes\": 2, \"after_first_strike\": false}, {\"at\": \"2026-11-11T00"
+      "detail": "[{\"at\": \"2026-11-12T09:27:57.478453+08:00\", \"from\": 23719, \"tables\": {\"shop.products\": {\"deleted\": 0, \"updated\": 1, \"inserted\": 0}}, \"undone\": 0, \"changes\": 1, \"after_first_strike\": false}, {\"at\": \"2026-11-12T09:27:57.903013+08:00\", \"from\": 23720, \"tables\": {\"shop.products\": {\"deleted\": 1, \"updated\": 1, \"inserted\": 0}}, \"undone\": 0, \"changes\": 2, \"after_first_strike\": false}, {\"at\": \"2026-11-12T09"
     },
     {
       "group": "undo",
@@ -1066,7 +1066,7 @@
       "group": "strikes",
       "name": "an_agent_sees_its_own_strikes",
       "status": "HOLDS",
-      "detail": "{\"login\": \"guard_atk_dc197bff3736\", \"frozen\": null, \"changed\": {\"shop.products\": 1}, \"stopped\": false, \"strikes\": 1, \"rows_left\": 999999, \"bytes_left\": 99999629, \"max_strikes\": 3, \"valid_until\": \"2026-11-11T01:55:37.86249+08:00\", \"max_table_share\": 0.1}"
+      "detail": "{\"login\": \"guard_atk_df556651f63a\", \"frozen\": null, \"changed\": {\"shop.products\": 1}, \"stopped\": false, \"strikes\": 1, \"rows_left\": 999999, \"bytes_left\": 99999629, \"max_strikes\": 3, \"valid_until\": \"2026-11-12T10:28:00.5449+08:00\", \"max_table_share\": 0.1}"
     },
     {
       "group": "strikes",
@@ -1108,19 +1108,19 @@
       "group": "strikes",
       "name": "the_agent_is_told_it_is_stopped",
       "status": "HOLDS",
-      "detail": "{\"login\": \"guard_atk_dc197bff3736\", \"frozen\": null, \"changed\": {\"shop.products\": 2}, \"stopped\": true, \"strikes\": 3, \"rows_left\": 999998, \"bytes_left\": 99999258, \"max_strikes\": 3, \"valid_until\": \"2026-11-11T01:55:37.86249+08:00\", \"max_table_share\": 0.1}"
+      "detail": "{\"login\": \"guard_atk_df556651f63a\", \"frozen\": null, \"changed\": {\"shop.products\": 2}, \"stopped\": true, \"strikes\": 3, \"rows_left\": 999998, \"bytes_left\": 99999258, \"max_strikes\": 3, \"valid_until\": \"2026-11-12T10:28:00.5449+08:00\", \"max_table_share\": 0.1}"
     },
     {
       "group": "strikes",
       "name": "keeper_ends_every_session_of_a_stopped_login",
       "status": "HOLDS",
-      "detail": "ended {'guard_atk_dc197bff3736': 'login stopped'}"
+      "detail": "ended {'guard_atk_df556651f63a': 'login stopped'}"
     },
     {
       "group": "strikes",
       "name": "keepers_round_names_the_stopped_login",
       "status": "HOLDS",
-      "detail": "stopped ['guard_atk_40d294ba671f', 'guard_atk_c1bc4251004a', 'guard_atk_dc197bff3736']; frozen None"
+      "detail": "stopped ['guard_atk_92027d057a78', 'guard_atk_ddf3e1df7c39', 'guard_atk_df556651f63a']; frozen None"
     },
     {
       "group": "strikes",
@@ -1132,7 +1132,7 @@
       "group": "strikes",
       "name": "the_timeline_marks_what_came_after_the_first_strike",
       "status": "HOLDS",
-      "detail": "[{\"at\": \"2026-11-11T00:55:39.001755+08:00\", \"from\": 23723, \"tables\": {\"shop.products\": {\"deleted\": 0, \"updated\": 1, \"inserted\": 0}}, \"undone\": 0, \"changes\": 1, \"after_first_strike\": false}, {\"at\": \"2026-11-11T00:55:40.653677+08:00\", \"from\": 25724, \"tables\": {\"shop.products\": {\"deleted\": 0, \"updated\""
+      "detail": "[{\"at\": \"2026-11-12T09:28:01.116349+08:00\", \"from\": 23723, \"tables\": {\"shop.products\": {\"deleted\": 0, \"updated\": 1, \"inserted\": 0}}, \"undone\": 0, \"changes\": 1, \"after_first_strike\": false}, {\"at\": \"2026-11-12T09:28:02.127152+08:00\", \"from\": 25724, \"tables\": {\"shop.products\": {\"deleted\": 0, \"updated\""
     },
     {
       "group": "strikes",
@@ -1294,7 +1294,7 @@
       "group": "drift",
       "name": "strikes_left_open_to_agents_is_found",
       "status": "HOLDS",
-      "detail": "guard_worker may set sequence guard.strikes_0f432827aa7b905d26a4de3391287789; guard_worker may use the sequence guard.strikes_0f432827aa7b905d26a4de3391287789"
+      "detail": "guard_worker may set sequence guard.strikes_4ce1dfba4c72be49e4e88ec95c7f979a; guard_worker may use the sequence guard.strikes_4ce1dfba4c72be49e4e88ec95c7f979a"
     },
     {
       "group": "drift",
@@ -1330,13 +1330,13 @@
       "group": "drift",
       "name": "agent_login_made_superuser_is_found",
       "status": "HOLDS",
-      "detail": "agent login too strong: guard_atk_b6f0105a4238; superuser logins changed"
+      "detail": "agent login too strong: guard_atk_81a75b6439ad; superuser logins changed"
     },
     {
       "group": "drift",
       "name": "agent_login_given_another_role_is_found",
       "status": "HOLDS",
-      "detail": "agent login guard_atk_b6f0105a4238 holds pg_read_server_files"
+      "detail": "agent login guard_atk_81a75b6439ad holds pg_read_server_files"
     },
     {
       "group": "drift",
@@ -1396,25 +1396,187 @@
       "group": "drift",
       "name": "a_role_holding_the_worker_role_through_another_is_found",
       "status": "HOLDS",
-      "detail": "agent login guard_atk_b6f0105a4238 holds guard_atk_mid_97091c78"
+      "detail": "agent login guard_atk_81a75b6439ad holds guard_atk_mid_a5cbfc7f"
     },
     {
       "group": "drift",
       "name": "agent_login_with_no_expiry_is_found",
       "status": "HOLDS",
-      "detail": "agent login not built by the broker: guard_atk_b6f0105a4238"
+      "detail": "agent login not built by the broker: guard_atk_81a75b6439ad"
     },
     {
       "group": "drift",
       "name": "a_login_holding_the_worker_role_through_another_role_is_found",
       "status": "HOLDS",
-      "detail": "agent login guard_atk_d841b18d5659 holds guard_atk_nest_f9517640; agent login not built by the broker: guard_atk_d841b18d5659; guard_atk_d841b18d5659 holds guard_worker through another role"
+      "detail": "agent login guard_atk_d75ddbf49879 holds guard_atk_nest_a34f8567; agent login not built by the broker: guard_atk_d75ddbf49879; guard_atk_d75ddbf49879 holds guard_worker through another role"
     },
     {
       "group": "drift",
       "name": "clean_again_after_every_repair",
       "status": "HOLDS",
       "detail": "[]"
+    },
+    {
+      "group": "lifecycle",
+      "name": "protecting_a_partitioned_table_is_refused",
+      "status": "HOLDS",
+      "detail": "refused 0A000"
+    },
+    {
+      "group": "lifecycle",
+      "name": "protecting_a_partition_is_refused",
+      "status": "HOLDS",
+      "detail": "refused 0A000"
+    },
+    {
+      "group": "lifecycle",
+      "name": "protecting_a_table_others_inherit_from_is_refused",
+      "status": "HOLDS",
+      "detail": "refused 0A000"
+    },
+    {
+      "group": "lifecycle",
+      "name": "protecting_a_table_with_no_primary_key_is_refused",
+      "status": "HOLDS",
+      "detail": "refused 0A000"
+    },
+    {
+      "group": "lifecycle",
+      "name": "a_refused_table_is_left_untouched",
+      "status": "HOLDS",
+      "detail": "0 rows in guard.guarded, 0 triggers"
+    },
+    {
+      "group": "lifecycle",
+      "name": "a_child_table_added_later_is_found",
+      "status": "HOLDS",
+      "detail": "guarded table shop.atk_life can no longer be protected: other tables inherit from it"
+    },
+    {
+      "group": "lifecycle",
+      "name": "until_then_a_write_through_the_parent_reaches_the_childs_rows",
+      "status": "NOTE",
+      "detail": "accepted like any drift the self-check finds: the write landed with 0 audit rows, until the keeper's round freezes writes"
+    },
+    {
+      "group": "lifecycle",
+      "name": "a_changed_primary_key_is_found",
+      "status": "HOLDS",
+      "detail": "guarded table shop.atk_life has a different primary key from the one its triggers use"
+    },
+    {
+      "group": "lifecycle",
+      "name": "rerunning_the_install_takes_up_the_new_key",
+      "status": "HOLDS",
+      "detail": "code | C... N guard.charge('code'); problems []"
+    },
+    {
+      "group": "lifecycle",
+      "name": "undo_stops_at_a_change_keyed_by_a_primary_key_that_is_gone",
+      "status": "HOLDS",
+      "detail": "1 undone, then AB005: The table's primary key has changed since this login changed it"
+    },
+    {
+      "group": "lifecycle",
+      "name": "undo_finishes_once_the_key_is_back",
+      "status": "HOLDS",
+      "detail": "1 undone, refused None"
+    },
+    {
+      "group": "lifecycle",
+      "name": "an_agent_cannot_unprotect_a_table",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "lifecycle",
+      "name": "the_keeper_cannot_unprotect_a_table",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "lifecycle",
+      "name": "the_broker_cannot_unprotect_a_table",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "lifecycle",
+      "name": "unprotecting_takes_the_triggers_off_and_leaves_no_problem",
+      "status": "HOLDS",
+      "detail": "0 triggers; problems []"
+    },
+    {
+      "group": "lifecycle",
+      "name": "an_agent_can_no_longer_write_an_unprotected_table",
+      "status": "HOLDS",
+      "detail": "refused 42501"
+    },
+    {
+      "group": "lifecycle",
+      "name": "undo_still_puts_back_what_was_changed_before_unprotecting",
+      "status": "HOLDS",
+      "detail": "1 undone, refused None"
+    },
+    {
+      "group": "lifecycle",
+      "name": "unprotecting_a_table_that_is_not_protected_is_refused",
+      "status": "HOLDS",
+      "detail": "refused 42P01"
+    },
+    {
+      "group": "lifecycle",
+      "name": "a_dropped_protected_table_is_found_by_its_name",
+      "status": "HOLDS",
+      "detail": "guard functions or triggers changed; guarded table has been dropped: shop.atk_gone"
+    },
+    {
+      "group": "lifecycle",
+      "name": "the_report_still_names_the_dropped_table",
+      "status": "HOLDS",
+      "detail": "{\"shop.products\": {\"deleted\": 0, \"updated\": 1, \"inserted\": 0}, \"shop.atk_gone (dropped)\": {\"deleted\": 0, \"updated\": 1, \"inserted\": 0}}"
+    },
+    {
+      "group": "lifecycle",
+      "name": "undo_passes_over_a_dropped_table_and_undoes_the_rest",
+      "status": "HOLDS",
+      "detail": "1 undone, refused None, passed over {'shop.atk_gone': 1}"
+    },
+    {
+      "group": "lifecycle",
+      "name": "the_owner_accepts_the_drop_from_the_command_line",
+      "status": "HOLDS",
+      "detail": "exit 0; problems []; "
+    },
+    {
+      "group": "lifecycle",
+      "name": "a_report_of_a_login_never_issued_is_refused",
+      "status": "HOLDS",
+      "detail": "refused 42704"
+    },
+    {
+      "group": "lifecycle",
+      "name": "a_timeline_of_a_login_never_issued_is_refused",
+      "status": "HOLDS",
+      "detail": "refused 42704"
+    },
+    {
+      "group": "lifecycle",
+      "name": "an_undo_of_a_login_never_issued_is_refused",
+      "status": "HOLDS",
+      "detail": "refused 42704"
+    },
+    {
+      "group": "lifecycle",
+      "name": "installing_as_a_role_that_is_not_a_superuser_is_refused",
+      "status": "HOLDS",
+      "detail": "ERROR: 42501: The guard has to be installed by a superuser, and guard_atk_28af8f44ff6c is not one; nothing was changed HINT: Its keeper has to end sessions and its broker has to fix settings on the lo"
+    },
+    {
+      "group": "lifecycle",
+      "name": "none_of_this_froze_or_reopened_writes_by_itself",
+      "status": "HOLDS",
+      "detail": "gate open: t"
     },
     {
       "group": "freeze",
@@ -1648,7 +1810,7 @@
       "group": "reach",
       "name": "login_cannot_connect_to_another_database",
       "status": "HOLDS",
-      "detail": "psql: error: connection to server at \"127.0.0.1\", port 5432 failed: FATAL:  permission denied for database \"agentdb_test_guardother_d2929e60"
+      "detail": "psql: error: connection to server at \"127.0.0.1\", port 5432 failed: FATAL:  permission denied for database \"agentdb_test_guardother_f4821960"
     },
     {
       "group": "reach",
@@ -1672,7 +1834,7 @@
       "group": "expiry",
       "name": "keeper_ends_the_expired_logins_sessions",
       "status": "HOLDS",
-      "detail": "{'guard_atk_e2ac232b95ac': 'login expired'}"
+      "detail": "{'guard_atk_f9065962afbe': 'login expired'}"
     },
     {
       "group": "retire",
@@ -1792,13 +1954,13 @@
       "group": "cli",
       "name": "status_reports_without_changing_anything",
       "status": "HOLDS",
-      "detail": "exit 0; 30 logins; "
+      "detail": "exit 0; 34 logins; "
     },
     {
       "group": "cli",
       "name": "one_keeper_round_exits_clean",
       "status": "HOLDS",
-      "detail": "{\"frozen\": null, \"problems\": [], \"ended\": [], \"logins\": 30, \"stopped\": [\"guard_atk_3c8c6728366f\", \"guard_atk_40d294ba671f\", \"guard_atk_c1bc4251004a\", \"guard_atk_dc197bff3736\"]}"
+      "detail": "{\"frozen\": null, \"problems\": [], \"ended\": [], \"logins\": 34, \"stopped\": [\"guard_atk_92027d057a78\", \"guard_atk_b0427774982c\", \"guard_atk_ddf3e1df7c39\", \"guard_atk_df556651f63a\"]}"
     },
     {
       "group": "cli",
@@ -1810,13 +1972,13 @@
       "group": "cli",
       "name": "run_retires_the_login_when_the_command_ends",
       "status": "HOLDS",
-      "detail": "guard_atk_4fb1976df84e: 0 left"
+      "detail": "guard_atk_5ac7b76f279a: 0 left"
     },
     {
       "group": "cli",
       "name": "undo_from_the_command_line",
       "status": "HOLDS",
-      "detail": "exit 0; {'from': None, 'kept': 0, 'login': 'guard_atk_142b2359fedb', 'undone': 1, 'refused': None, 'remaining': 0}"
+      "detail": "exit 0; {'from': None, 'kept': 0, 'login': 'guard_atk_ea04734d3ca5', 'undone': 1, 'refused': None, 'remaining': 0, 'dropped_tables': {}}"
     },
     {
       "group": "cli",
@@ -1840,19 +2002,19 @@
       "group": "cli",
       "name": "report_shows_the_stop_and_the_timeline_after_the_login_is_gone",
       "status": "HOLDS",
-      "detail": "exit 0; strikes 2; [{\"at\": \"2026-11-11T00:59:45.233229+08:00\", \"from\": 35417, \"tables\": {\"shop.products\": {\"deleted\": 0, \"updated\": 1, \"inserted\": 0}}, \"undone\": 0, \"changes\": 1, \"after_first_strike\": false}, {\"at\": \"2026-11-11T00:59:46.253287+08:00\", \"from\": 37418, \"tables\": {\"shop.products\": {\"deleted\": 0, \"updated\""
+      "detail": "exit 0; strikes 2; [{\"at\": \"2026-11-12T09:30:46.622871+08:00\", \"from\": 35422, \"tables\": {\"shop.products\": {\"deleted\": 0, \"updated\": 1, \"inserted\": 0}}, \"undone\": 0, \"changes\": 1, \"after_first_strike\": false}, {\"at\": \"2026-11-12T09:30:47.236629+08:00\", \"from\": 37423, \"tables\": {\"shop.products\": {\"deleted\": 0, \"updated\""
     },
     {
       "group": "cli",
       "name": "undo_from_a_point_on_the_command_line",
       "status": "HOLDS",
-      "detail": "exit 0; {'from': 35417, 'kept': 0, 'login': 'guard_atk_aa4837179c0e', 'undone': 1, 'refused': None, 'remaining': 0}; prices [10.0, 10.0, 10.0]"
+      "detail": "exit 0; {'from': 35422, 'kept': 0, 'login': 'guard_atk_60f1547cdb13', 'undone': 1, 'refused': None, 'remaining': 0, 'dropped_tables': {}}; prices [10.0, 10.0, 10.0]"
     },
     {
       "group": "cli",
       "name": "a_stop_is_found_when_the_command_ends_before_the_keepers_round",
       "status": "HOLDS",
-      "detail": "exit 3: ['landed', 'AB007', 'landed', 'AB007', 'AB001', 'still_connects']; run said {'stopped': 'guard_atk_cca1c6f54b33'}; 0 left"
+      "detail": "exit 3: ['landed', 'AB007', 'landed', 'AB007', 'AB001', 'still_connects']; run said {'stopped': 'guard_atk_2d183be517af'}; 0 left"
     },
     {
       "group": "cli",
@@ -1864,13 +2026,13 @@
       "group": "cli",
       "name": "undo_since_strike_on_the_command_line",
       "status": "HOLDS",
-      "detail": "exit 0; {'from': 41420, 'kept': 1, 'login': 'guard_atk_cca1c6f54b33', 'undone': 1, 'refused': None, 'remaining': 0}; prices [11.0, 10.0, 10.0]"
+      "detail": "exit 0; {'from': 41425, 'kept': 1, 'login': 'guard_atk_2d183be517af', 'undone': 1, 'refused': None, 'remaining': 0, 'dropped_tables': {}}; prices [11.0, 10.0, 10.0]"
     },
     {
       "group": "cli",
       "name": "undo_since_strike_is_refused_for_a_login_with_no_strike",
       "status": "HOLDS",
-      "detail": "exit 1: guard_atk_206a80b5d52b has no strike to go back to"
+      "detail": "exit 1: guard_atk_0fad5e653eac has no strike to go back to"
     },
     {
       "group": "cli",
@@ -1900,7 +2062,7 @@
       "group": "cli",
       "name": "a_backup_is_kept_only_after_it_restores",
       "status": "HOLDS",
-      "detail": "exit 0; ['agentdb_test_guardsuite_d2929e60-20261111-010038.dump']; {'shop.atk_c2': 0, 'shop.atk_c4': 0, 'shop.settings': 12, 'shop.suppliers': 50, 'shop.atk_p2': 0, 'shop.atk_p4': 0, 'shop.atk_setting': 1, 'shop.products': 4000, 'shop.atk_c1': 0, 'shop.atk_c3': 0, 'shop.atk_flags': 15, 'shop.atk_fresh': 10, 'shop.atk_p1': 0, 'shop.atk_p3': 0, 'shop.orders': 20001, 'guard.audit': 20103}"
+      "detail": "exit 0; ['agentdb_test_guardsuite_f4821960-20261112-093120.dump']; {'shop.atk_c3': 0, 'shop.atk_flags': 15, 'shop.atk_fresh': 10, 'shop.atk_p2': 0, 'shop.atk_p3': 0, 'shop.atk_setting': 1, 'shop.orders': 20001, 'shop.atk_c1': 0, 'shop.suppliers': 50, 'shop.atk_c2': 0, 'shop.atk_c4': 0, 'shop.atk_p1': 0, 'shop.atk_p4': 0, 'shop.products': 4000, 'shop.settings': 12, 'guard.audit': 20108}"
     },
     {
       "group": "cli",
@@ -1918,25 +2080,25 @@
       "group": "timing",
       "name": "one_row_update",
       "status": "NOTE",
-      "detail": "median ms over 30: application 4.95, agent 10.87, on this machine"
+      "detail": "median ms over 30: application 2.94, agent 5.97, on this machine"
     },
     {
       "group": "timing",
       "name": "one_self_check",
       "status": "NOTE",
-      "detail": "median 31.5 ms over 10, on this machine"
+      "detail": "median 28.0 ms over 10, on this machine"
     },
     {
       "group": "sandbox",
       "name": "this_machines_own_route_to_superuser_is_found",
       "status": "HOLDS",
-      "detail": "exit 1, gaps: ['no_other_credentials_in_the_environment', 'no_credential_files_within_reach', 'cannot_run_wsl', 'cannot_reach_docker_engine']"
+      "detail": "exit 1, gaps: ['no_other_credentials_in_the_environment', 'no_credential_files_within_reach', 'cannot_run_wsl']"
     },
     {
       "group": "sandbox",
       "name": "the_sandbox_checks_own_login_query_works_for_an_agent",
       "status": "HOLDS",
-      "detail": "guard_atk_b6f0105a4238 superuser=off {\"login\": \"guard_atk_b6f0105a4238\", \"frozen\": null, \"changed\": {\"shop.products\": 2}, \"stopped\": false, \"strikes\": 1, \"rows_left\": 48, \"bytes_left\": 4999256, \"max_s"
+      "detail": "guard_atk_81a75b6439ad superuser=off {\"login\": \"guard_atk_81a75b6439ad\", \"frozen\": null, \"changed\": {\"shop.products\": 2}, \"stopped\": false, \"strikes\": 1, \"rows_left\": 48, \"bytes_left\": 4999255, \"max_s"
     },
     {
       "group": "sandbox",
