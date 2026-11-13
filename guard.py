@@ -12,7 +12,8 @@
   keep      the keeper's rounds alone: self-check (a problem freezes writes), end stuck sessions and
             the sessions of stopped logins
   undo      stop a login and undo its changes, newest first: all of them, or back to a point with
-            --from or --since-strike
+            --from or --since-strike. A row someone else has changed since is left as it is and named;
+            several logins named together are undone newest first across all of them
   report    what a login really changed, from the audit log, and its strikes; --timeline lists its
             transactions, for choosing the point undo --from goes back to
   freeze    stop every agent's writes now; unfreeze is the owner's
@@ -89,7 +90,7 @@ def unprotect(owner, database, table):
     return json.loads(owner.sql("SELECT guard.boundary_problems();", database))
 
 
-# The audit log, undo records and budgets (with each login's strikes) as one JSON document, written
+# The audit log, undo records, budgets (with each login's strikes) and declarations as one JSON document, written
 # row by row: psql fetches FETCH_COUNT rows at a time, so neither the server nor this process holds
 # the whole log at once.
 AUDIT_EXPORT = """BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
@@ -101,6 +102,9 @@ SELECT CASE WHEN row_number() OVER (ORDER BY u.audit_id) > 1 THEN ', ' ELSE '' E
 SELECT '], "budgets": [';
 SELECT CASE WHEN row_number() OVER (ORDER BY b.login) > 1 THEN ', ' ELSE '' END || (to_jsonb(b) || to_jsonb(guard.strikes(b.login)))
 FROM guard.budget b ORDER BY b.login;
+SELECT '], "declared": [';
+SELECT CASE WHEN row_number() OVER (ORDER BY d.login, d.target::text) > 1 THEN ', ' ELSE '' END || row_to_json(d)
+FROM guard.declared d ORDER BY d.login, d.target::text;
 SELECT ']}';
 COMMIT;"""
 
@@ -271,8 +275,12 @@ def uninstall(owner, database, audit_to, drop_roles=False):
 
 
 def issue_login(broker, database, rows, size, hours, connections=4, temp_file_limit="100MB", prefix="agent",
-                max_table_share=0.1, strikes=3):
-    """(login, password, valid_until) of a new login, on a connection running as guard_broker."""
+                max_table_share=1, strikes=3):
+    """(login, password, valid_until) of a new login, on a connection running as guard_broker.
+
+    max_table_share is the operator's ceiling on how much of one table the login may change. At 1 there is none:
+    past a small allowance the login then declares how many rows it means to change, and is held to that.
+    """
     database_name(database)
     if not re.fullmatch(SIZE, temp_file_limit):
         raise ValueError("temp_file_limit must look like 100MB")
@@ -324,8 +332,26 @@ def keeper_round(keeper, database=None, idle=THRESHOLDS["idle"], transaction=THR
                 stopped=[login["login"] for login in status["logins"] if login["stopped"]])
 
 
+def stop_for_undo(keeper, logins, database=None):
+    """Stop the logins before their changes are undone. Sessions end first, since an open transaction could hold
+    the budget row guard.stop_agent updates or a row undo has to put back, and again after, for one that
+    reconnected in between."""
+    names = ",".join(f"'{login}'" for login in logins)
+    end = f"SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename IN ({names});"
+    keeper.sql(end, database)
+    for login in logins:
+        keeper.sql(f"SELECT guard.stop_agent('{login}');", database)
+    keeper.sql(end, database)
+
+
+def check_start(start):
+    if start is not None and (isinstance(start, bool) or not isinstance(start, int) or start < 0):
+        raise ValueError("The change to undo from is a whole number, as report --timeline shows it")
+
+
 def undo_login(keeper, login, database=None, start=None, since_strike=False):
-    """Stop a login, then undo its changes newest first; stops at newer work and says why.
+    """Stop a login, then undo its changes newest first. A row something else has changed since is left as it is
+    and named in the answer, with who changed it; everything else is undone.
 
     Everything it changed, or back to a point, keeping what it did before: start is the audit id of the
     first change to undo (the "from" of a transaction in guard.timeline), and since_strike takes the
@@ -337,17 +363,26 @@ def undo_login(keeper, login, database=None, start=None, since_strike=False):
         start = json.loads(keeper.sql(f"SELECT guard.report('{login}');", database))["struck_from"]
         if start is None:
             raise ValueError(f"{login} has no strike to go back to")
-    if start is not None and (isinstance(start, bool) or not isinstance(start, int) or start < 0):
-        raise ValueError("The change to undo from is a whole number, as report --timeline shows it")
-    # Sessions end first, since an open transaction could hold the budget row guard.stop_agent updates
-    # or a row undo has to put back, and again after, for one that reconnected in between.
-    end = f"SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename='{login}';"
-    keeper.sql(end, database)
-    keeper.sql(f"SELECT guard.stop_agent('{login}');", database)
-    keeper.sql(end, database)
+    check_start(start)
+    stop_for_undo(keeper, [login], database)
     result = keeper.execute(f"SELECT guard.undo('{login}', {'NULL' if start is None else start});", database)
     if result.returncode:
         return dict(login=login, undone=0, remaining=None, refused=dict(error=result.stderr.strip()[:1000]))
+    return json.loads(result.stdout)
+
+
+def undo_logins(keeper, logins, database=None, start=None):
+    """Stop several logins, then undo their changes together, newest first across all of them, so that none
+    of them is in the way of another; a row something outside them has changed since is left and named."""
+    logins = list(dict.fromkeys(logins))
+    if not logins or any(not isinstance(login, str) or not re.fullmatch(LOGIN, login) for login in logins):
+        raise ValueError("Not a login name")
+    check_start(start)
+    stop_for_undo(keeper, logins, database)
+    names = "ARRAY[" + ",".join(f"'{login}'" for login in logins) + "]::name[]"
+    result = keeper.execute(f"SELECT guard.undo_logins({names}, {'NULL' if start is None else start});", database)
+    if result.returncode:
+        return dict(logins=logins, undone=0, remaining=None, refused=dict(error=result.stderr.strip()[:1000]))
     return json.loads(result.stdout)
 
 
@@ -503,8 +538,9 @@ def main():
     start.add_argument("--connections", type=int, default=4)
     start.add_argument("--temp-file-limit", default="100MB")
     start.add_argument("--prefix", default="agent", help="the start of the login's name")
-    start.add_argument("--max-table-share", type=float, default=0.1,
-                       help="beyond its first 20 rows, the share of a table it may change; 1 means no limit")
+    start.add_argument("--max-table-share", type=float, default=1.0,
+                       help="a ceiling on the share of one table it may change, which nothing it declares lifts; 1, the default, "
+                            "sets none: past a small allowance it then changes as many rows of a table as it declared first")
     start.add_argument("--strikes", type=int, default=3,
                        help="how many times it may be refused for going past a limit; at the last one it is stopped")
     start.add_argument("--undo-on-stop", action="store_true",
@@ -521,7 +557,7 @@ def main():
         action.add_argument("--idle-seconds", type=seconds, help="end a session idle in a transaction this long; default 60")
         action.add_argument("--transaction-seconds", type=seconds, help="end a transaction open this long; default 300")
     back = actions.add_parser("undo", help="stop a login and undo its changes: all of them, or back to a point")
-    back.add_argument("login")
+    back.add_argument("login", nargs="+", help="the login; several are undone together, newest change first across all of them")
     point = back.add_mutually_exclusive_group()
     point.add_argument("--from", dest="start", type=int, metavar="CHANGE",
                        help="undo only this change and the login's later ones; report --timeline lists them")
@@ -570,9 +606,15 @@ def main():
             print(json.dumps(report, indent=2))
             return
         if args.action == "undo":
-            result = undo_login(connect(args, KEEPER), args.login, start=args.start, since_strike=args.since_strike)
+            if len(args.login) > 1 and args.since_strike:
+                raise ValueError("--since-strike takes one login: each login's first strike is a point of its own")
+            keeper = connect(args, KEEPER)
+            if len(args.login) == 1:
+                result = undo_login(keeper, args.login[0], start=args.start, since_strike=args.since_strike)
+            else:
+                result = undo_logins(keeper, args.login, start=args.start)
             print(json.dumps(result, indent=2))
-            sys.exit(0 if not result["refused"] else 1)
+            sys.exit(0 if not result["refused"] else 1)  # 1: something was left as it was; the answer says what
         if args.action == "freeze":
             reason = args.reason.replace("'", "''")
             connect(args, KEEPER).sql(f"SELECT guard.freeze('{reason}');")

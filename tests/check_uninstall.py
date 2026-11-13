@@ -53,10 +53,14 @@ SELECT coalesce(json_agg(line ORDER BY line), '[]') FROM (
   UNION ALL
   SELECT 'schema exists: ' || nspname FROM named
 ) x;"""
+GUARDED = (*PROTECTED, "shop.tickets")
 GUARD_ROLES = ("SELECT coalesce(string_agg(rolname, ' ' ORDER BY rolname), '') FROM pg_roles "
                "WHERE rolname IN ('guard_worker', 'guard_keeper', 'guard_broker');")
 # The application's own, before the guard: a table agents may read only some columns of, and a procedure only they may call.
+# And a protected table that takes its ids from a sequence in another schema, named by a default and owned by no column.
 NOTES_SQL = """CREATE TABLE shop.notes (id bigint PRIMARY KEY, body text, secret text);
+CREATE SCHEMA ids; CREATE SEQUENCE ids.ticket_ids;
+CREATE TABLE shop.tickets (id bigint DEFAULT nextval('ids.ticket_ids') PRIMARY KEY, body text);
 CREATE PROCEDURE shop.touch_note(p_id bigint) LANGUAGE sql AS $$ UPDATE shop.notes SET body = body WHERE id = p_id $$;
 REVOKE EXECUTE ON PROCEDURE shop.touch_note(bigint) FROM PUBLIC;"""
 # Grants an owner may well make to the worker role, each kind of which uninstall has to take back.
@@ -91,13 +95,14 @@ def main():
     def use(database):
         """Install, then one agent login, issued by the broker, changes product 2001's price."""
         owner = connect(database)
-        gb.install(owner, database, PROTECTED)
+        gb.install(owner, database, GUARDED)
         owner.sql("SELECT guard.allow('shop.restock(bigint,integer)', 'writes only shop.products');"
                   "GRANT SELECT ON ALL TABLES IN SCHEMA shop TO guard_worker;" + WORKER_GRANTS)
         login, password, _ = gb.issue_login(connect(database, role=gb.BROKER), database, 10, 100_000, 1, prefix="guard_atk")
         logins.append(login)
         agent = connect(database, user=login, host="127.0.0.1", password_value=password)
         agent.sql("UPDATE shop.products SET price = price + 1 WHERE id = 2001;")
+        agent.sql("BEGIN; INSERT INTO shop.tickets(body) VALUES ('the id comes from the default'); ROLLBACK;")  # must be allowed; leaves no row
         return agent, login
 
     folder = tempfile.mkdtemp(prefix="guard-uninstall-")
@@ -134,7 +139,7 @@ def main():
         still = connect(a).sql("SELECT (SELECT frozen_reason IS NULL FROM guard.gate)::text || ' ' || "
                                "(SELECT count(*) FROM pg_trigger WHERE tgname = 'guard_row');")
         record("uninstall_refuses_while_something_outside_the_guard_depends_on_it",
-               refused is not None and "agent_changes" in refused and still == f"true {len(PROTECTED)}",
+               refused is not None and "agent_changes" in refused and still == f"true {len(GUARDED)}",
                f"{refused or 'NOT REFUSED'}; open, triggers: {still}")
         connect(a).sql("DROP VIEW shop.agent_changes;")
 

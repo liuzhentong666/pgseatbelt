@@ -418,9 +418,9 @@ class Attacks:
         self.record("incident", "a_read_only_login_can_read", rows.returncode == 0, rows.stdout.strip())
         self.refused("incident", "a_read_only_login_cannot_write", reader, self.update(self.rows(1)), ("AB002",))
 
-        allowed, allowed_name = self.issue(share=1, **WIDE)  # decided on before it starts; then undo must bring it all back
+        allowed, allowed_name = self.issue(share=1, **WIDE)  # no ceiling, and it says first what it means to do; then undo must bring it all back
         start = self.state()
-        self.ok(allowed, "DELETE FROM shop.orders;")
+        self.ok(allowed, "SELECT guard.declare('shop.orders', 30000); DELETE FROM shop.orders;")
         gone = self.owner.sql("SELECT count(*) FROM shop.orders;")
         report = json.loads(self.keeper.sql(f"SELECT guard.report('{allowed_name}');", self.database))
         table = report["tables"].get("shop.orders", {})
@@ -844,7 +844,7 @@ class Attacks:
                             "CREATE TABLE shop.atk_parted_1 PARTITION OF shop.atk_parted FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');"
                             "CREATE TABLE shop.atk_parent(id int PRIMARY KEY); CREATE TABLE shop.atk_child() INHERITS (shop.atk_parent);"
                             "CREATE TABLE shop.atk_keyless(id int);")
-        for label, table in (("a_partitioned_table", "shop.atk_parted"), ("a_partition", "shop.atk_parted_1"),
+        for label, table in (("a_partition_by_itself", "shop.atk_parted_1"),
                              ("a_table_others_inherit_from", "shop.atk_parent"), ("a_table_with_no_primary_key", "shop.atk_keyless")):
             self.refused("lifecycle", f"protecting_{label}_is_refused", self.owner, f"SELECT guard.protect('{table}');", ("0A000",))
         left = self.owner.sql("SELECT count(*) FROM guard.guarded g JOIN pg_class c ON c.oid = g.target "
@@ -954,6 +954,264 @@ class Attacks:
              " ".join(result.stderr.split())[:200])
         open_still = self.owner.sql("SELECT frozen_reason IS NULL FROM guard.gate;")
         note("none_of_this_froze_or_reopened_writes_by_itself", open_still == "t", f"gate open: {open_still}")
+
+    def undo_columns(self):
+        """Undo where a statement cannot simply write a row back: generated columns, an identity the database
+        always generates, and a change the database refuses to take back."""
+        note = lambda name, ok, detail: self.record("undo", name, ok, detail)
+        rows = lambda table: self.owner.sql(f"SELECT md5(string_agg(t::text, ',' ORDER BY t.id)) FROM {table} t;")
+        value = lambda row: self.owner.sql(f"SELECT note FROM shop.atk_gen WHERE id={row};")
+        self.ok(self.owner, "CREATE TABLE shop.atk_gen(id int PRIMARY KEY, minutes int NOT NULL,"
+                            " hours numeric(6,2) GENERATED ALWAYS AS (round(minutes / 60.0, 2)) STORED, note text NOT NULL);"
+                            "INSERT INTO shop.atk_gen(id, minutes, note) SELECT n, 60 + n, 'x' FROM generate_series(1, 40) n;"
+                            "CREATE TABLE shop.atk_ident(id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY, v text NOT NULL);"
+                            "INSERT INTO shop.atk_ident(v) SELECT 'x' FROM generate_series(1, 40);"
+                            "SELECT guard.protect('shop.atk_gen'); SELECT guard.protect('shop.atk_ident');")
+        clean = rows("shop.atk_gen"), rows("shop.atk_ident")
+        g, g_name = self.issue()
+        for statement in ("UPDATE shop.atk_gen SET note='agent' WHERE id=1;", "UPDATE shop.atk_gen SET minutes=600 WHERE id=2;",
+                          "DELETE FROM shop.atk_gen WHERE id=3;", "INSERT INTO shop.atk_gen(id, minutes, note) VALUES (900, 90, 'new');",
+                          "DELETE FROM shop.atk_ident WHERE id=5;", "INSERT INTO shop.atk_ident(v) VALUES ('new');"):
+            self.ok(g, statement)
+        recorded = self.owner.sql(f"SELECT string_agg(array_to_string(columns, '+'), ' ' ORDER BY id) FROM guard.audit WHERE login='{g_name}' AND op='U';")
+        note("a_generated_column_is_never_recorded_as_changed", recorded == "note minutes", f"the two updates recorded: {recorded}")
+        landed = rows("shop.atk_gen") != clean[0] and rows("shop.atk_ident") != clean[1]
+        result = undo_login(self.keeper, g_name, self.database)
+        note("undo_works_on_a_table_with_a_generated_column", landed and result["undone"] == 6 and result["refused"] is None and rows("shop.atk_gen") == clean[0],
+             f"{result['undone']} undone, refused {result['refused']}; an update beside it, an update under it, a delete and an insert")
+        note("undo_puts_a_deleted_row_back_under_the_identity_it_had", rows("shop.atk_ident") == clean[1],
+             "the table is identical, in a column the database ALWAYS generates")
+
+        stuck, stuck_name = self.issue()
+        for statement in ("UPDATE shop.atk_gen SET note='older' WHERE id=10;", "DELETE FROM shop.atk_gen WHERE id=11;",
+                          "UPDATE shop.atk_gen SET note='newer' WHERE id=12;"):
+            self.ok(stuck, statement)
+        self.ok(self.owner, "ALTER TABLE shop.atk_gen ADD CONSTRAINT atk_no_eleven CHECK (id <> 11);")
+        result = undo_login(self.keeper, stuck_name, self.database)
+        refused = result["refused"] or {}
+        note("undo_leaves_a_change_the_database_will_not_take_back_and_does_the_rest",
+             result["undone"] == 2 and result["skipped"] == 1 and refused.get("code") == "AB008" and refused.get("sqlstate") == "23514"
+             and result["remaining"] == 1 and (value(12), value(10)) == ("x", "x"),
+             f"{result['undone']} undone, {result['skipped']} left: {refused.get('code')} {refused.get('sqlstate')}: {str(refused.get('error'))[:120]}")
+        self.ok(self.owner, "ALTER TABLE shop.atk_gen DROP CONSTRAINT atk_no_eleven;")
+        result = undo_login(self.keeper, stuck_name, self.database)
+        note("undo_finishes_once_the_cause_is_gone", result["undone"] == 1 and result["refused"] is None and rows("shop.atk_gen") == clean[0],
+             f"{result['undone']} undone, refused {result['refused']}")
+
+    def undo_conflicts(self):
+        """Undo when others have changed some of the rows since. Those rows are left as they are, with the login's older
+        changes to them; everything else is undone, and the answer says which rows it left and who changed them. Several
+        logins undone together go newest first across all of them, so none is in another's way."""
+        note = lambda name, ok, detail: self.record("undo", name, ok, detail)
+        table = lambda: self.owner.sql("SELECT count(*) || ' ' || md5(string_agg(t::text, ',' ORDER BY t.id)) FROM shop.atk_conf t;")
+        row = lambda key: self.owner.sql(f"SELECT coalesce((SELECT rep || ' ' || v || ' ' || note FROM shop.atk_conf WHERE id={key}), 'gone');")
+        self.ok(self.owner, "CREATE TABLE shop.atk_conf(id int PRIMARY KEY, rep text NOT NULL, v int NOT NULL, note text NOT NULL);"
+                            "INSERT INTO shop.atk_conf SELECT n, 'dan', 0, '-' FROM generate_series(1, 300) n;"
+                            "SELECT guard.protect('shop.atk_conf');")
+        clean = table()
+        # Sara takes over Dan's accounts in one statement and makes a few changes of her own; Tom and the owner then
+        # change some of the same rows, as in the second e-commerce run.
+        sara, sara_name = self.issue(rows=1000, share=1)
+        tom, tom_name = self.issue(rows=1000, share=1)
+        self.ok(sara, "SELECT guard.declare('shop.atk_conf', 100);"
+                      "INSERT INTO shop.atk_conf SELECT n, 'sara', 0, 'new' FROM generate_series(1001, 1005) n;")
+        self.ok(sara, "UPDATE shop.atk_conf SET rep = 'sara' WHERE id <= 30;")
+        self.ok(sara, "UPDATE shop.atk_conf SET v = 1 WHERE id = 40;")
+        self.ok(sara, "UPDATE shop.atk_conf SET note = 'sara' WHERE id = 40;")
+        self.ok(tom, "DELETE FROM shop.atk_conf WHERE id = 5; UPDATE shop.atk_conf SET rep = 'tom' WHERE id = 6;"
+                     "UPDATE shop.atk_conf SET note = 'tom' WHERE id = 40;")
+        self.ok(self.owner, "UPDATE shop.atk_conf SET rep = 'owner' WHERE id = 7;")  # not an agent: no audit row
+        result = undo_login(self.keeper, sara_name, self.database)
+        left = {key: row(key) for key in (5, 6, 7, 8, 1001)}
+        note("undo_leaves_rows_others_changed_since_and_undoes_the_rest",
+             result["undone"] == 32 and result["skipped"] == 5 and result["remaining"] == 5
+             and left == {5: "gone", 6: "tom 0 -", 7: "owner 0 -", 8: "dan 0 -", 1001: "gone"},
+             f"{result['undone']} undone, {result['skipped']} left; rows {left}")
+        named = {c["key"]["id"]: c["changed_since_by"] for c in result["conflicts"]}
+        note("undo_says_which_rows_it_left_and_who_changed_them_since",
+             result["conflicts_total"] == 4 and named == {5: [tom_name], 6: [tom_name], 7: ["(no agent change recorded)"], 40: [tom_name]}
+             and result["blocked_by"] == {tom_name: 3, "(no agent change recorded)": 1} and (result["refused"] or {}).get("code") == "AB005",
+             f"{named}; blocked by {result['blocked_by']}")
+        note("an_older_change_to_a_row_it_left_is_left_too", row(40) == "dan 1 tom",
+             f"row 40: {row(40)}; her earlier v=1 stays, since her later change to the row was left")
+        partly = result["partly_undone_transactions"]
+        note("undo_lists_a_transaction_it_left_partly_undone", [(t["login"], t["undone"], t["left"]) for t in partly] == [(sara_name, 27, 3)],
+             json.dumps(partly)[:300])
+        tom_result = undo_login(self.keeper, tom_name, self.database)
+        self.ok(self.owner, "UPDATE shop.atk_conf SET rep = 'sara' WHERE id = 7;")  # the owner puts back what Sara had left there
+        result = undo_login(self.keeper, sara_name, self.database)
+        note("once_the_others_are_undone_a_rerun_takes_back_the_rest",
+             tom_result["undone"] == 3 and tom_result["refused"] is None and result["undone"] == 5 and result["remaining"] == 0
+             and result["refused"] is None and table() == clean,
+             f"Tom {tom_result['undone']} undone, then Sara {result['undone']} more; the table as at the start: {table() == clean}")
+
+        a, a_name = self.issue(rows=1000, share=1)
+        b, b_name = self.issue(rows=1000, share=1)
+        self.ok(a, "SELECT guard.declare('shop.atk_conf', 100); UPDATE shop.atk_conf SET rep = 'a' WHERE id <= 40;")
+        self.ok(b, "DELETE FROM shop.atk_conf WHERE id = 5; UPDATE shop.atk_conf SET rep = 'b' WHERE id BETWEEN 6 AND 10;")
+        self.ok(a, "UPDATE shop.atk_conf SET v = 2 WHERE id = 6;")
+        undo = lambda *rest: subprocess.run([sys.executable, str(ROOT / "guard.py"), "undo", "--database", self.database, *rest],
+                                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180, cwd=ROOT,
+                                            creationflags=FLAGS)
+        strike = undo(a_name, b_name, "--since-strike")
+        note("since_strike_takes_one_login", strike.returncode == 1 and "one login" in strike.stderr, strike.stderr.strip()[:160])
+        done = undo(a_name, b_name)
+        answer = json.loads(done.stdout) if done.returncode == 0 else {}
+        note("several_logins_undone_together_go_newest_first_across_all_of_them",
+             answer.get("undone") == 47 and answer.get("skipped") == 0 and answer.get("refused") is None and table() == clean,
+             f"exit {done.returncode}; {answer.get('undone')} undone, {answer.get('skipped')} left; the table as at the start: "
+             f"{table() == clean}; {done.stderr.strip()[:200]}")
+        for label, connection in (("an_agent", a), ("the_broker", self.broker)):
+            self.refused("undo", f"{label}_cannot_undo_logins", connection, f"SELECT guard.undo_logins(ARRAY['{b_name}']::name[]);")
+
+    def sequences(self):
+        """Tables that take their ids from a sequence a column default names and no column owns, as a dumped schema has them."""
+        note = lambda name, ok, detail: self.record("sequences", name, ok, detail)
+        may_use = lambda sequence: self.owner.sql(f"SELECT has_sequence_privilege('{WORKER}', '{sequence}', 'USAGE');")
+        self.ok(self.owner, "CREATE SCHEMA atk_ids; CREATE SEQUENCE atk_ids.far; CREATE SEQUENCE shop.atk_shared;"
+                            "CREATE TABLE shop.atk_seq_a(id bigint DEFAULT nextval('shop.atk_shared') PRIMARY KEY,"
+                            " far bigint DEFAULT nextval('atk_ids.far'), v text);"
+                            "CREATE TABLE shop.atk_seq_b(id bigint DEFAULT nextval('shop.atk_shared') PRIMARY KEY, v text);"
+                            "SELECT guard.protect('shop.atk_seq_a'); SELECT guard.protect('shop.atk_seq_b');")
+        found = self.problems()
+        s, _ = self.issue()
+        landed = [self.code(s, "INSERT INTO shop.atk_seq_a(v) VALUES ('x');"), self.code(s, "INSERT INTO shop.atk_seq_b(v) VALUES ('x');")]
+        ids = self.owner.sql("SELECT (SELECT id || ' ' || far FROM shop.atk_seq_a) || ' ' || (SELECT id FROM shop.atk_seq_b);")
+        note("an_insert_takes_its_id_from_a_sequence_a_default_names", landed == ["landed", "landed"] and ids == "1 1 2" and found == [],
+             f"{landed}; ids {ids}, one of them from a sequence in another schema; problems {found}")
+        self.refused("sequences", "an_agent_still_cannot_set_such_a_sequence", s, "SELECT setval('shop.atk_shared', 1);")
+        self.ok(self.owner, "SELECT guard.unprotect('shop.atk_seq_a');")
+        kept = self.code(s, "INSERT INTO shop.atk_seq_b(v) VALUES ('y');")
+        rights = may_use("shop.atk_shared"), may_use("atk_ids.far")
+        note("unprotecting_one_table_keeps_a_sequence_another_still_uses", kept == "landed" and rights == ("t", "f"),
+             f"insert into the other table {kept}; shared sequence usable {rights[0]}, the first table's own {rights[1]}")
+        self.ok(self.owner, "SELECT guard.unprotect('shop.atk_seq_b');")
+        found = self.problems()
+        note("the_last_table_takes_the_sequence_with_it", may_use("shop.atk_shared") == "f" and found == [],
+             f"shared sequence usable {may_use('shop.atk_shared')}; problems {found}")
+
+    def partitions(self):
+        """A partitioned table: limited, recorded and undone as one table, whichever partition a row is in."""
+        note = lambda name, ok, detail: self.record("partitions", name, ok, detail)
+        rows = lambda: self.owner.sql("SELECT count(*) || ' ' || md5(string_agg(t::text, ',' ORDER BY t.id)) FROM shop.atk_pay t;")
+        self.ok(self.owner, "CREATE SEQUENCE shop.atk_pay_ids;"
+                            "CREATE TABLE shop.atk_pay(id bigint DEFAULT nextval('shop.atk_pay_ids'), paid date NOT NULL, amount numeric(8,2) NOT NULL,"
+                            " supplier_id bigint REFERENCES shop.suppliers(id) ON DELETE SET NULL, PRIMARY KEY (id, paid)) PARTITION BY RANGE (paid);"
+                            "CREATE TABLE shop.atk_pay_h1 PARTITION OF shop.atk_pay FOR VALUES FROM ('2026-01-01') TO ('2026-07-01');"
+                            "CREATE TABLE shop.atk_pay_h2 PARTITION OF shop.atk_pay FOR VALUES FROM ('2026-07-01') TO ('2027-01-01');"
+                            "INSERT INTO shop.atk_pay(paid, amount) SELECT CASE WHEN n <= 990 THEN '2026-02-01' ELSE '2026-08-01' END::date, 1"
+                            " FROM generate_series(1, 1000) n;")
+        cascade = [p for p in self.problems() if "atk_pay" in p]
+        note("a_cascade_into_a_partitioned_table_is_named_once_by_the_table", cascade == ["changing shop.suppliers cascades into shop.atk_pay, which is not guarded"],
+             "; ".join(cascade) or "NOT FOUND")
+        self.ok(self.owner, "SELECT guard.protect('shop.atk_pay');")
+        found = self.problems()
+        note("a_partitioned_table_can_be_protected", found == [], f"problems {found}")
+        clean = rows()
+        p, p_name = self.issue()
+        self.refused("partitions", "an_agent_cannot_write_a_partition_directly", p, "UPDATE shop.atk_pay_h1 SET amount=2 WHERE id=1;")
+        # Eight of the ten rows of the second partition: fine against the whole table of 1000, far too many against that partition alone.
+        landed = [self.code(p, "UPDATE shop.atk_pay SET amount=2 WHERE id=1;"),
+                  self.code(p, "UPDATE shop.atk_pay SET amount=3 WHERE paid >= '2026-07-01' AND id <= 998;"),
+                  self.code(p, "INSERT INTO shop.atk_pay(paid, amount) VALUES ('2026-09-09', 9);"),
+                  self.code(p, "UPDATE shop.atk_pay SET paid='2026-10-10' WHERE id=2;"),  # moves the row to the other partition
+                  self.code(p, "DELETE FROM shop.atk_pay WHERE id=3;")]
+        note("an_agent_writes_through_the_table_and_the_share_is_of_the_whole_table", landed == ["landed"] * 5, str(landed))
+        recorded = self.owner.sql(f"SELECT string_agg(DISTINCT target::text || '=' || target_name, ',') || ' ' || count(*) || ' ' || "
+                                  f"string_agg(op, '' ORDER BY id) FROM guard.audit WHERE login='{p_name}';")
+        note("changes_are_recorded_against_the_table_not_a_partition", recorded == "shop.atk_pay=shop.atk_pay 13 UUUUUUUUUIDID", recorded)
+        moved = self.owner.sql("SELECT tableoid::regclass::text FROM shop.atk_pay WHERE id=2;")
+        result = undo_login(self.keeper, p_name, self.database)
+        note("undo_puts_a_partitioned_table_back_as_it_was", moved == "shop.atk_pay_h2" and result["undone"] == 13 and result["refused"] is None
+             and rows() == clean, f"{result['undone']} undone, refused {result['refused']}; a row that had moved to {moved} is back")
+        big, _ = self.issue(rows=500)  # so that the share of the table refuses it, not the budget
+        self.refused("partitions", "too_much_of_a_partitioned_table_is_refused", big, "UPDATE shop.atk_pay SET amount=0 WHERE id <= 150;", ("AB007",))
+        fingerprint = self.owner.sql("SELECT fingerprint FROM guard.gate;")
+        self.ok(self.owner, "CREATE TABLE shop.atk_pay_next PARTITION OF shop.atk_pay FOR VALUES FROM ('2027-01-01') TO ('2028-01-01');")
+        later, later_name = self.issue()
+        landed = self.code(later, "INSERT INTO shop.atk_pay(paid, amount) VALUES ('2027-03-03', 7);")
+        seen = self.audit_count(later_name)
+        found = self.problems()
+        note("a_partition_added_later_is_covered_and_is_no_problem", landed == "landed" and seen == 1 and found == [], f"insert {landed}, {seen} audit row; problems {found}")
+        undo_login(self.keeper, later_name, self.database)
+        self.ok(self.owner, "DROP TABLE shop.atk_pay_next;")
+        found = self.problems()
+        note("dropping_a_partition_is_no_problem", found == [] and self.owner.sql("SELECT fingerprint FROM guard.gate;") == fingerprint, f"problems {found}")
+        self.ok(self.owner, "ALTER TABLE shop.atk_pay_h1 DISABLE TRIGGER guard_row;")
+        try:
+            found = self.problems()
+        finally:
+            self.ok(self.owner, "ALTER TABLE shop.atk_pay_h1 ENABLE TRIGGER guard_row;")
+        note("a_guard_trigger_disabled_on_one_partition_is_found", "disabled trigger shop.atk_pay_h1.guard_row" in found, "; ".join(found) or "NOT FOUND")
+        gb.install(self.owner, self.database)
+        again, _ = self.issue()
+        landed = self.code(again, "UPDATE shop.atk_pay SET amount=4 WHERE id=4;")
+        found = self.problems()
+        note("rerunning_the_install_keeps_a_partitioned_table_protected", landed == "landed" and found == [] and self.audit_count() > 0, f"write {landed}; problems {found}")
+        self.ok(self.owner, "UPDATE shop.atk_pay SET amount=1 WHERE id=4;")
+
+    def declaring(self):
+        """A login with no ceiling: past a small allowance it changes what it declared first. A bulk change that
+        was meant goes through, and a statement that touches more than was meant does not."""
+        note = lambda name, ok, detail: self.record("declare", name, ok, detail)
+        own = lambda connection: json.loads(self.ok(connection, "SELECT guard.status();"))
+        changed = lambda: int(self.owner.sql("SELECT sum(v) FROM shop.atk_bulk;"))
+        tiny = lambda: self.owner.sql("SELECT count(*) FROM shop.atk_tiny;")
+        self.ok(self.owner, "CREATE TABLE shop.atk_bulk(id int PRIMARY KEY, v int NOT NULL); INSERT INTO shop.atk_bulk SELECT n, 0 FROM generate_series(1, 4000) n;"
+                            "CREATE TABLE shop.atk_tiny(id int PRIMARY KEY, v int NOT NULL); INSERT INTO shop.atk_tiny SELECT n, 0 FROM generate_series(1, 12) n;"
+                            "SELECT guard.protect('shop.atk_bulk'); SELECT guard.protect('shop.atk_tiny');")
+        d, d_name = self.issue(rows=20000, share=1)
+        small = self.code(d, "UPDATE shop.atk_bulk SET v = v WHERE id <= 300;")  # 7.5% of the table, and nothing to count in v
+        bulk = "UPDATE shop.atk_bulk SET v = v + 1 WHERE id BETWEEN 301 AND 900;"
+        result = d.execute(bulk, self.database)
+        note("a_change_within_the_allowance_needs_no_declaration", small == "landed", f"300 of 4000 rows: {small}")
+        note("a_bulk_change_nobody_declared_is_refused_and_is_no_strike",
+             sqlstate(result.stderr) == "AB009" and own(d)["strikes"] == 0 and changed() == 0,
+             f"refused {sqlstate(result.stderr)}; strikes {own(d)['strikes']}; rows changed {changed()}")
+        hint = " ".join(result.stderr.split())
+        note("the_refusal_says_how_to_declare", "guard.declare('shop.atk_bulk', <rows>)" in hint and "not a strike" in hint, hint[hint.find("HINT"):][:330])
+        said = json.loads(self.ok(d, "SELECT guard.declare('shop.atk_bulk', 900);"))
+        landed = self.code(d, bulk)
+        note("declared_first_the_same_change_goes_through",
+             landed == "landed" and changed() == 600 and said["declared"] == 900 and said["changed_so_far"] == 300
+             and own(d)["declared"] == {"shop.atk_bulk": 900},
+             f"{landed}; {changed()} rows changed; declare answered {said}")
+        over = self.code(d, "UPDATE shop.atk_bulk SET v = v + 1 WHERE id BETWEEN 901 AND 1000;")
+        note("more_rows_than_it_declared_is_refused_and_is_a_strike", over == "AB007" and own(d)["strikes"] == 1 and changed() == 600,
+             f"{over}; strikes {own(d)['strikes']}; rows changed {changed()}")
+        self.ok(d, "SELECT guard.declare('shop.atk_bulk', 1000);")
+        again = self.code(d, "UPDATE shop.atk_bulk SET v = v + 1 WHERE id BETWEEN 901 AND 1000;")
+        slip = self.code(d, "UPDATE shop.atk_bulk SET v = v + 1;")  # the WHERE forgotten: 4000 rows against the 1000 declared
+        note("a_statement_that_touches_far_more_than_was_meant_is_stopped", again == "landed" and slip == "AB007" and changed() == 700
+             and own(d)["strikes"] == 2, f"after declaring again {again}; with no WHERE {slip}; rows changed {changed()}; strikes {own(d)['strikes']}")
+        report = json.loads(self.keeper.sql(f"SELECT guard.report('{d_name}');", self.database))
+        note("the_report_shows_what_a_login_declared", report.get("declared") == {"shop.atk_bulk": 1000}, str(report.get("declared")))
+
+        t, t_name = self.issue(share=1)
+        first = self.code(t, "DELETE FROM shop.atk_tiny;")
+        self.ok(t, "SELECT guard.declare('shop.atk_tiny', 12);")
+        second, left = self.code(t, "DELETE FROM shop.atk_tiny;"), tiny()
+        result = undo_login(self.keeper, t_name, self.database)
+        note("emptying_a_small_table_needs_a_declaration_and_can_be_undone",
+             (first, second, left) == ("AB009", "landed", "0") and result["undone"] == 12 and tiny() == "12",
+             f"undeclared {first}, declared {second}, {left} rows left, then {result['undone']} undone")
+
+        capped, _ = self.issue(rows=20000, share=0.1)
+        self.ok(capped, "SELECT guard.declare('shop.atk_bulk', 4000);")
+        note("nothing_it_declares_lifts_the_operators_ceiling", self.code(capped, "UPDATE shop.atk_bulk SET v = v WHERE id > 3000;") == "AB007",
+             "1000 of 4000 rows declared and refused under a ceiling of a tenth")
+        poor, _ = self.issue(rows=50, share=1)
+        self.ok(poor, "SELECT guard.declare('shop.atk_bulk', 4000);")
+        note("nothing_it_declares_stretches_the_budget", self.code(poor, "UPDATE shop.atk_bulk SET v = v WHERE id > 3900;") == "AB002",
+             "100 rows declared and refused on a budget of 50")
+        for label, connection, statement, states in (
+                ("an_agent_cannot_write_its_declaration_directly", d, "UPDATE guard.declared SET row_count = 1000000;", ("42501",)),
+                ("an_agent_cannot_read_what_others_declared", d, "SELECT * FROM guard.declared;", ("42501",)),
+                ("an_agent_cannot_declare_for_a_table_it_may_not_write", d, "SELECT guard.declare('shop.app_log', 10);", ("42P01",)),
+                ("the_keeper_cannot_declare", self.keeper, "SELECT guard.declare('shop.atk_bulk', 10);", ("42501",))):
+            self.refused("declare", label, connection, statement, states)
+        found = self.problems()
+        note("the_self_check_is_clean_with_declarations", found == [], f"problems {found}")
 
     def freeze(self):
         """Fail closed: a problem freezes writes, reads go on, and only the owner opens them again."""
@@ -1201,7 +1459,7 @@ print(os.environ['PGUSER'], *codes, flush=True)
         def stopped_run(ids, wait, *options):
             """(exit code, what the agent printed after its login, the login, what run said about the stop)."""
             ran = tool("run", "--rows", "1000000", "--bytes", "100000000", "--hours", "0.2", "--prefix", "guard_atk", "--strikes", "2",
-                       *options, "--", sys.executable, "-c", reckless(ids, wait))
+                       "--max-table-share", "0.1", *options, "--", sys.executable, "-c", reckless(ids, wait))
             words = (ran.stdout.strip().splitlines() or [""])[-1].split()
             said = [json.loads(line) for line in ran.stderr.splitlines() if line.startswith('{"stopped": "')]
             return ran.returncode, words[1:] or [ran.stderr.strip()[-300:]], words[0] if words else "", said[0] if said else {}
@@ -1363,7 +1621,7 @@ def main():
         try:
             attacks.set_up()
             for group in ("normal", "escalate", "guard_internals", "agents", "budgets", "incidents", "stopped", "held_up", "storage",
-                          "undo", "strikes", "small_tables", "drift", "lifecycle"):
+                          "undo", "strikes", "small_tables", "drift", "lifecycle", "undo_columns", "undo_conflicts", "sequences", "partitions", "declaring"):
                 getattr(attacks, group)()
             target, name = attacks.issue()
             attacks.ok(target, attacks.update(attacks.rows(1)))

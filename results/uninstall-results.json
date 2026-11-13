@@ -11,12 +11,12 @@
     {
       "name": "dropping_the_roles_is_refused_while_another_database_has_the_guard",
       "status": "HOLDS",
-      "detail": "The guard's roles are still used in agentdb_test_unin_b_0257f0b4 (the guard is installed there, or something there was granted to them), and roles are shared by every database; nothing was changed"
+      "detail": "The guard's roles are still used in agentdb_test_unin_b_1a500680 (the guard is installed there, or something there was granted to them), and roles are shared by every database; nothing was changed"
     },
     {
       "name": "uninstall_refuses_while_something_outside_the_guard_depends_on_it",
       "status": "HOLDS",
-      "detail": "Objects outside the guard depend on it, and dropping its schema would drop them too: rule _RETURN on view shop.agent_changes. Nothing was changed; open, triggers: true 4"
+      "detail": "Objects outside the guard depend on it, and dropping its schema would drop them too: rule _RETURN on view shop.agent_changes. Nothing was changed; open, triggers: true 5"
     },
     {
       "name": "uninstall_puts_back_every_right_schema_and_trigger",
@@ -26,7 +26,7 @@
     {
       "name": "the_audit_log_is_saved_first",
       "status": "HOLDS",
-      "detail": "1 rows in agentdb_test_unin_a_0257f0b4-guard-audit-20261112-012559-844633Z.json; strikes and stopped by login: {'guard_atk_4cdce049642a': (0, False)}"
+      "detail": "1 rows in agentdb_test_unin_a_1a500680-guard-audit-20261113-234416-765044Z.json; strikes and stopped by login: {'guard_atk_90608fdbee23': (0, False)}"
     },
     {
       "name": "the_agents_change_stays",
@@ -61,12 +61,12 @@
     {
       "name": "dropping_the_roles_is_refused_while_another_database_grants_them_something",
       "status": "HOLDS",
-      "detail": "exit 1; The guard's roles are still used in agentdb_test_unin_a_0257f0b4 (the guard is installed there, or something there was granted to them), and roles are shared by every database; nothing was changed; then: true guard_broker guard_keeper guard_worker"
+      "detail": "exit 1; The guard's roles are still used in agentdb_test_unin_a_1a500680 (the guard is installed there, or something there was granted to them), and roles are shared by every database; nothing was changed; then: true guard_broker guard_keeper guard_worker"
     },
     {
       "name": "uninstall_from_the_command_line_with_drop_roles",
       "status": "HOLDS",
-      "detail": "exit 0; dropped ['guard_atk_1c0092e08c16', 'guard_atk_4cdce049642a', 'guard_atk_9b9c922e0214', 'guard_broker', 'guard_keeper', 'guard_worker']; "
+      "detail": "exit 0; dropped ['guard_atk_3cc1ac9fb559', 'guard_atk_90608fdbee23', 'guard_atk_c513e68e9e2f', 'guard_broker', 'guard_keeper', 'guard_worker']; "
     },
     {
       "name": "a_database_locked_before_stays_locked",
@@ -86,7 +86,7 @@
     {
       "name": "uninstall_where_there_is_no_guard_is_refused",
       "status": "HOLDS",
-      "detail": "The guard is not installed in agentdb_test_unin_b_0257f0b4"
+      "detail": "The guard is not installed in agentdb_test_unin_b_1a500680"
     }
   ]
 }

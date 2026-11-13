@@ -1,20 +1,20 @@
 [HOLDS] installed_and_clean: problems []
-[HOLDS] dropping_the_roles_is_refused_while_another_database_has_the_guard: The guard's roles are still used in agentdb_test_unin_b_0257f0b4 (the guard is installed there, or something there was granted to them), and roles are shared by every database; nothing was changed
-[HOLDS] uninstall_refuses_while_something_outside_the_guard_depends_on_it: Objects outside the guard depend on it, and dropping its schema would drop them too: rule _RETURN on view shop.agent_changes. Nothing was changed; open, triggers: true 4
+[HOLDS] dropping_the_roles_is_refused_while_another_database_has_the_guard: The guard's roles are still used in agentdb_test_unin_b_1a500680 (the guard is installed there, or something there was granted to them), and roles are shared by every database; nothing was changed
+[HOLDS] uninstall_refuses_while_something_outside_the_guard_depends_on_it: Objects outside the guard depend on it, and dropping its schema would drop them too: rule _RETURN on view shop.agent_changes. Nothing was changed; open, triggers: true 5
 [HOLDS] uninstall_puts_back_every_right_schema_and_trigger: identical
-[HOLDS] the_audit_log_is_saved_first: 1 rows in agentdb_test_unin_a_0257f0b4-guard-audit-20261112-012559-844633Z.json; strikes and stopped by login: {'guard_atk_4cdce049642a': (0, False)}
+[HOLDS] the_audit_log_is_saved_first: 1 rows in agentdb_test_unin_a_1a500680-guard-audit-20261113-234416-765044Z.json; strikes and stopped by login: {'guard_atk_90608fdbee23': (0, False)}
 [HOLDS] the_agents_change_stays: price 11.00
 [HOLDS] the_agent_login_can_no_longer_write: ERROR:  42501: permission denied for schema shop
 [HOLDS] the_application_still_writes: written
 [HOLDS] the_roles_stay_for_the_other_database: guard_broker guard_keeper guard_worker
 [HOLDS] uninstall_works_after_a_protected_table_was_dropped: uninstalled
 [HOLDS] install_and_uninstall_again_put_back_the_same: identical
-[HOLDS] dropping_the_roles_is_refused_while_another_database_grants_them_something: exit 1; The guard's roles are still used in agentdb_test_unin_a_0257f0b4 (the guard is installed there, or something there was granted to them), and roles are shared by every database; nothing was changed; then: true gua
-[HOLDS] uninstall_from_the_command_line_with_drop_roles: exit 0; dropped ['guard_atk_1c0092e08c16', 'guard_atk_4cdce049642a', 'guard_atk_9b9c922e0214', 'guard_broker', 'guard_keeper', 'guard_worker']; 
+[HOLDS] dropping_the_roles_is_refused_while_another_database_grants_them_something: exit 1; The guard's roles are still used in agentdb_test_unin_a_1a500680 (the guard is installed there, or something there was granted to them), and roles are shared by every database; nothing was changed; then: true gua
+[HOLDS] uninstall_from_the_command_line_with_drop_roles: exit 0; dropped ['guard_atk_3cc1ac9fb559', 'guard_atk_90608fdbee23', 'guard_atk_c513e68e9e2f', 'guard_broker', 'guard_keeper', 'guard_worker']; 
 [HOLDS] a_database_locked_before_stays_locked: identical
 [HOLDS] public_got_nothing_it_did_not_have: false false
 [HOLDS] no_guard_role_or_agent_login_is_left: none
-[HOLDS] uninstall_where_there_is_no_guard_is_refused: The guard is not installed in agentdb_test_unin_b_0257f0b4
+[HOLDS] uninstall_where_there_is_no_guard_is_refused: The guard is not installed in agentdb_test_unin_b_1a500680
 {
  "holds": 17,
  "gaps": [],
